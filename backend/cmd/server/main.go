@@ -35,6 +35,9 @@ func main() {
 	xp := xpay.New(cfg.WxAppID, cfg.WxAppSecret, cfg.XPayAppKey, cfg.XPaySandbox)
 	ap := &app.App{St: st, XPay: xp}
 	srv := &api.Server{Cfg: cfg, St: st, App: ap, XPay: xp}
+	tk := &app.Ticker{App: ap, Sandbox: cfg.XPaySandbox}
+	tk.Start()
+	defer tk.Stop()
 	addr := cfg.ListenAddr
 	fmt.Printf("dianjing backend listening on %s (data: %s)\n", addr, cfg.DataDir)
 	log.Fatal(http.ListenAndServe(addr, srv.Routes()))

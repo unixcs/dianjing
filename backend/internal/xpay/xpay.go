@@ -57,25 +57,6 @@ func Str(m map[string]any, k string) string {
 
 // QueryOrderPaid inspects a query_order response for a paid state.
 // xpay replies vary by field naming; accept the known variants.
-func QueryOrderPaid(resp map[string]any) bool {
-	for _, key := range []string{"pay_status", "state", "order_state"} {
-		switch v := resp[key].(type) {
-		case string:
-			if strings.EqualFold(v, "SUCCESS") || v == "1" || v == "PAID" {
-				return true
-			}
-		case float64:
-			if v == 1 {
-				return true
-			}
-		}
-	}
-	if order, ok := resp["order"].(map[string]any); ok {
-		return QueryOrderPaid(order)
-	}
-	return false
-}
-
 // Client talks to api.weixin.qq.com/xpay on behalf of one miniapp.
 type Client struct {
 	AppID     string
@@ -235,9 +216,22 @@ func (c *Client) postOnce(uri, token string, body []byte, out any) error {
 	return nil
 }
 
+// xpay order.status values from query_order (order object), per the
+// legacy sandbox-check interpreter and refund convergence code.
+const (
+	VOrderCreated       = 0 // 已创建未支付
+	VOrderPaying        = 1 // 支付中
+	VOrderPaid          = 2 // 已支付
+	VOrderPaidPending   = 3 // 已支付待发货（同样是 paid）
+	VOrderRefunded      = 5 // 已退款
+	VOrderClosed        = 6 // 已关闭（未支付取消）
+	VOrderUserRefunded  = 8 // 用户退款完成（Apple 侧）
+)
+
 // QueryOrder calls /xpay/query_order to reconcile an order by out_trade_no.
-func (c *Client) QueryOrder(outTradeNo, envStr string) (map[string]any, error) {
-	payload := map[string]any{"out_trade_no": outTradeNo, "env": envStr}
+// Legacy payload shape: {openid, env, order_id=out_trade_no}.
+func (c *Client) QueryOrder(openid, outTradeNo, envStr string) (map[string]any, error) {
+	payload := map[string]any{"openid": openid, "order_id": outTradeNo, "env": envStr}
 	var out map[string]any
 	if err := c.signedPost(uriQueryOrder, payload, &out); err != nil {
 		return nil, err
@@ -245,11 +239,51 @@ func (c *Client) QueryOrder(outTradeNo, envStr string) (map[string]any, error) {
 	return out, nil
 }
 
-// RefundOrder calls /xpay/refund_order.
-func (c *Client) RefundOrder(payOrderID string, refundFee int64) (map[string]any, error) {
+// QueryOrderStatus extracts order.status from a query_order response.
+func QueryOrderStatus(resp map[string]any) int {
+	order, _ := resp["order"].(map[string]any)
+	if order == nil {
+		return -1
+	}
+	if v, ok := order["status"].(float64); ok {
+		return int(v)
+	}
+	return -1
+}
+
+// QueryOrderOrderType extracts order.order_type (7 = iOS Apple channel).
+func QueryOrderOrderType(resp map[string]any) int {
+	order, _ := resp["order"].(map[string]any)
+	if order == nil {
+		return -1
+	}
+	if v, ok := order["order_type"].(float64); ok {
+		return int(v)
+	}
+	return -1
+}
+
+// QueryOrderPaid reports whether a query_order response says the order is
+// paid (status 2 or 3).
+func QueryOrderPaid(resp map[string]any) bool {
+	st := QueryOrderStatus(resp)
+	return st == VOrderPaid || st == VOrderPaidPending
+}
+
+// RefundOrder calls /xpay/refund_order. Legacy payload shape:
+// {openid, order_id=out_trade_no, refund_order_id, left_fee, refund_fee,
+// biz_meta, refund_reason:"3", req_from:"3", env}.
+func (c *Client) RefundOrder(openid, outTradeNo, refundOrderID string, leftFee, refundFee int64, bizMeta, envStr string) (map[string]any, error) {
 	payload := map[string]any{
-		"pay_order_id": payOrderID,
-		"refund_fee":   refundFee, // 分
+		"openid":          openid,
+		"order_id":        outTradeNo,
+		"refund_order_id": refundOrderID,
+		"left_fee":        leftFee,
+		"refund_fee":      refundFee,
+		"biz_meta":        bizMeta,
+		"refund_reason":   "3",
+		"req_from":        "3",
+		"env":             envStr,
 	}
 	var out map[string]any
 	if err := c.signedPost(uriRefundOrder, payload, &out); err != nil {
@@ -260,15 +294,15 @@ func (c *Client) RefundOrder(payOrderID string, refundFee int64) (map[string]any
 
 // NotifyProvideGoods calls /xpay/notify_provide_goods — the exception
 // that carries access_token only, no pay_sig (ported behaviour).
-func (c *Client) NotifyProvideGoods(env int, payOrderID, outTradeNo string) (map[string]any, error) {
+// Legacy payload: {order_id: out_trade_no, env}.
+func (c *Client) NotifyProvideGoods(env int, outTradeNo string) (map[string]any, error) {
 	tok, err := c.AccessToken()
 	if err != nil {
 		return nil, err
 	}
 	payload := map[string]any{
-		"env":          env,
-		"pay_order_id": payOrderID,
-		"out_trade_no": outTradeNo,
+		"order_id": outTradeNo,
+		"env":      env,
 	}
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("https://api.weixin.qq.com%s?access_token=%s", uriNotifyProvideGood, tok)

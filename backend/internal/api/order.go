@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -171,7 +172,12 @@ func (s *Server) handleOrderConfirmPay(w http.ResponseWriter, r *http.Request) {
 		okJSON(w, map[string]any{"order": s.toOrderJSON(o)})
 		return
 	}
-	q, err := s.XPay.QueryOrder(o.OrderNo, xpay.EnvStr(s.Cfg.XPaySandbox))
+	u2, _ := s.St.UserByID(o.UserID)
+	openid := ""
+	if u2 != nil {
+		openid = u2.Openid
+	}
+	q, err := s.XPay.QueryOrder(openid, o.OrderNo, xpay.EnvStr(s.Cfg.XPaySandbox))
 	if err != nil {
 		s.St.Event("order.confirm_pay_fail", "order", o.ID, fmt.Sprintf(`{"error":%q}`, err.Error()))
 		// Do not trust the client report on query failure; the ticker
@@ -214,6 +220,71 @@ func (s *Server) handleOrderCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	o2, _ := s.App.OrderByID(o.ID)
 	okJSON(w, map[string]any{"order": s.toOrderJSON(o2)})
+}
+
+// ---- POST /orders/:id/refund : apply for a refund ----
+
+type refundReq struct {
+	Reason string `json:"reason"`
+}
+
+func (s *Server) handleOrderRefund(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	o, err := s.App.OrderOwnedBy(id, u.ID)
+	if err != nil {
+		fail(w, http.StatusNotFound, "订单不存在")
+		return
+	}
+	var req refundReq
+	json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req)
+	rr, err := s.App.ApplyRefund(o, req.Reason)
+	if err != nil {
+		if errors.Is(err, app.ErrRefundUnavailable) || errors.Is(err, app.ErrConflict) {
+			failMsg(w, "当前订单状态不可申请退款")
+			return
+		}
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	o2, _ := s.App.OrderByID(o.ID)
+	okJSON(w, map[string]any{
+		"order":  s.toOrderJSON(o2),
+		"refund": refundJSON(rr),
+	})
+}
+
+func refundJSON(rr *app.RefundsRow) map[string]any {
+	if rr == nil {
+		return nil
+	}
+	return map[string]any{
+		"id":           rr.ID,
+		"refund_no":    rr.RefundNo,
+		"amount_cents": rr.Amount,
+		"status":       rr.Status,
+		"mode":         rr.Mode,
+		"ios_waiting":  rr.IOSWaiting,
+		"created_at":   rr.CreatedAt,
+	}
+}
+
+// ---- GET /orders/:id/refund : latest refund of an owned order ----
+
+func (s *Server) handleOrderRefundGet(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	o, err := s.App.OrderOwnedBy(id, u.ID)
+	if err != nil {
+		fail(w, http.StatusNotFound, "订单不存在")
+		return
+	}
+	rr, err := s.App.LatestRefundForOrder(o.ID)
+	if err != nil {
+		okJSON(w, map[string]any{"refund": nil})
+		return
+	}
+	okJSON(w, map[string]any{"refund": refundJSON(rr)})
 }
 
 // ---- GET /orders?status= ----

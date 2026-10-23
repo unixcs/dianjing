@@ -117,6 +117,8 @@ var schema = []string{
 		status TEXT NOT NULL, -- applying/approved/refunded/rejected/failed
 		mode TEXT NOT NULL,   -- auto/audit
 		audit_note TEXT NOT NULL DEFAULT '',
+		ios_waiting INTEGER NOT NULL DEFAULT 0,     -- iOS 渠道：等待 App Store 退款
+		xpay_submitted INTEGER NOT NULL DEFAULT 0,  -- 已调用 xpay refund_order
 		created_at INTEGER NOT NULL,
 		updated_at INTEGER NOT NULL
 	)`,
@@ -126,9 +128,12 @@ var schema = []string{
 		order_id INTEGER NOT NULL DEFAULT 0,
 		pay_order_id TEXT NOT NULL DEFAULT '',
 		fingerprint TEXT NOT NULL UNIQUE,
+		binding_status TEXT NOT NULL DEFAULT '',
 		request_reason TEXT NOT NULL DEFAULT '',
 		service_stage TEXT NOT NULL DEFAULT '',
+		result_code INTEGER NOT NULL DEFAULT 1,
 		suggestion TEXT NOT NULL DEFAULT '',
+		evidence TEXT NOT NULL DEFAULT '',
 		raw TEXT NOT NULL,
 		created_at INTEGER NOT NULL
 	)`,
