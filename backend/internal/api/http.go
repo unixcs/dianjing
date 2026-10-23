@@ -15,13 +15,17 @@ import (
 	"strings"
 	"time"
 
+	"dianjing/backend/internal/app"
 	"dianjing/backend/internal/config"
 	"dianjing/backend/internal/store"
+	"dianjing/backend/internal/xpay"
 )
 
 type Server struct {
-	Cfg *config.Config
-	St  *store.Store
+	Cfg  *config.Config
+	St   *store.Store
+	App  *app.App
+	XPay *xpay.Client
 }
 
 // ---- response helpers ----

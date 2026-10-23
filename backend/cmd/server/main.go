@@ -10,8 +10,10 @@ import (
 	"os"
 
 	"dianjing/backend/internal/api"
+	"dianjing/backend/internal/app"
 	"dianjing/backend/internal/config"
 	"dianjing/backend/internal/store"
+	"dianjing/backend/internal/xpay"
 )
 
 func main() {
@@ -30,7 +32,9 @@ func main() {
 	}
 	defer st.Close()
 
-	srv := &api.Server{Cfg: cfg, St: st}
+	xp := xpay.New(cfg.WxAppID, cfg.WxAppSecret, cfg.XPayAppKey, cfg.XPaySandbox)
+	ap := &app.App{St: st, XPay: xp}
+	srv := &api.Server{Cfg: cfg, St: st, App: ap, XPay: xp}
 	addr := cfg.ListenAddr
 	fmt.Printf("dianjing backend listening on %s (data: %s)\n", addr, cfg.DataDir)
 	log.Fatal(http.ListenAndServe(addr, srv.Routes()))
