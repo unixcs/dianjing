@@ -1,0 +1,16 @@
+# secrets & local state
+dianjing.env
+*.env
+!dianjing.env.example
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# go
+backend/server
+/dist/
+
+# os/editor
+.DS_Store
+*.swp
