@@ -219,13 +219,13 @@ func (c *Client) postOnce(uri, token string, body []byte, out any) error {
 // xpay order.status values from query_order (order object), per the
 // legacy sandbox-check interpreter and refund convergence code.
 const (
-	VOrderCreated       = 0 // 已创建未支付
-	VOrderPaying        = 1 // 支付中
-	VOrderPaid          = 2 // 已支付
-	VOrderPaidPending   = 3 // 已支付待发货（同样是 paid）
-	VOrderRefunded      = 5 // 已退款
-	VOrderClosed        = 6 // 已关闭（未支付取消）
-	VOrderUserRefunded  = 8 // 用户退款完成（Apple 侧）
+	VOrderCreated      = 0 // 已创建未支付
+	VOrderPaying       = 1 // 支付中
+	VOrderPaid         = 2 // 已支付
+	VOrderPaidPending  = 3 // 已支付待发货（同样是 paid）
+	VOrderRefunded     = 5 // 已退款
+	VOrderClosed       = 6 // 已关闭（未支付取消）
+	VOrderUserRefunded = 8 // 用户退款完成（Apple 侧）
 )
 
 // QueryOrder calls /xpay/query_order to reconcile an order by out_trade_no.

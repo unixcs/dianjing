@@ -12,12 +12,12 @@ import (
 
 // Ticker compensates what pushes/clients may have missed, ported from
 // the legacy per-60s systemd timers (app/timer/service/Order.php):
-//   1. pending-pay orders older than closeHours  -> auto cancel
-//   2. refunding orders                          -> query_order classify
-//      (paid but unmarked -> MarkPaid; refunded 5/8 -> finalize)
-//   3. approved non-iOS refunds not yet submitted-> xpay refund_order
-//   4. paid orders without provide_goods success -> claim + dispatch
-//      (skipped when risk-locked)
+//  1. pending-pay orders older than closeHours  -> auto cancel
+//  2. refunding orders                          -> query_order classify
+//     (paid but unmarked -> MarkPaid; refunded 5/8 -> finalize)
+//  3. approved non-iOS refunds not yet submitted-> xpay refund_order
+//  4. paid orders without provide_goods success -> claim + dispatch
+//     (skipped when risk-locked)
 type Ticker struct {
 	App        *App
 	Interval   time.Duration
@@ -81,8 +81,8 @@ func (t *Ticker) closeStalePendingOrders() {
 	}
 }
 
-// 2. query_order reconciliation for orders in 退款中 or stuck pending-pay
-//    (ported syncVirtualTradeStates + syncVirtualRefund).
+//  2. query_order reconciliation for orders in 退款中 or stuck pending-pay
+//     (ported syncVirtualTradeStates + syncVirtualRefund).
 func (t *Ticker) syncRefundingOrders() {
 	rows, err := t.App.St.DB.Query(`SELECT `+OrderCols+` FROM orders
 		WHERE status IN (?,?) ORDER BY id LIMIT 20`, OrderRefunding, OrderPendingPay)
@@ -157,9 +157,9 @@ func (t *Ticker) submitApprovedRefunds() {
 	}
 }
 
-// 4. provide-goods dispatch for paid orders (ported syncVirtualProvideGoods):
-//    待联系 → 服务中 transition implies service started; we treat 待联系
-//    orders as delivered (contact info shown to user), dispatch once.
+//  4. provide-goods dispatch for paid orders (ported syncVirtualProvideGoods):
+//     待联系 → 服务中 transition implies service started; we treat 待联系
+//     orders as delivered (contact info shown to user), dispatch once.
 func (t *Ticker) dispatchProvideGoods() {
 	rows, err := t.App.St.DB.Query(`SELECT `+OrderCols+` FROM orders
 		WHERE status IN (?,?) AND pay_time > 0 AND provide_goods_status = '' ORDER BY id LIMIT 20`,

@@ -25,14 +25,14 @@ import (
 )
 
 const (
-	virtualEventPay         = "xpay_goods_deliver_notify"
-	virtualEventRefund      = "xpay_refund_notify"
-	virtualEventIOSInquiry  = "xpay_subscribe_ios_refund_query_notify"
+	virtualEventPay        = "xpay_goods_deliver_notify"
+	virtualEventRefund     = "xpay_refund_notify"
+	virtualEventIOSInquiry = "xpay_subscribe_ios_refund_query_notify"
 )
 
-func (s *Server) pushToken() string    { return s.Cfg.XPayPushToken }
-func (s *Server) pushAESKey() string   { return s.Cfg.XPayPushAESKey }
-func (s *Server) pushAppID() string    { return s.Cfg.WxAppID }
+func (s *Server) pushToken() string  { return s.Cfg.XPayPushToken }
+func (s *Server) pushAESKey() string { return s.Cfg.XPayPushAESKey }
+func (s *Server) pushAppID() string  { return s.Cfg.WxAppID }
 
 // handleWxMsg is mounted at POST+GET /wx/msg (nginx: /wx/ = this server).
 func (s *Server) handleWxMsg(w http.ResponseWriter, r *http.Request) {

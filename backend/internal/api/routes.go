@@ -31,5 +31,25 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /wx/msg", s.handleWxMsg)
 	mux.HandleFunc("POST /wx/msg", s.handleWxMsg)
 
+	// Admin panel: page + assets embedded, API behind password session.
+	mux.HandleFunc("GET /v2/admin", s.handleAdminPage)
+	mux.HandleFunc("POST /v2/api/admin/login", s.handleAdminLogin)
+	mux.HandleFunc("GET /v2/api/admin/overview", s.adminAuth(s.handleAdminOverview))
+	mux.HandleFunc("GET /v2/api/admin/categories", s.adminAuth(s.handleAdminCategories))
+	mux.HandleFunc("POST /v2/api/admin/categories", s.adminAuth(s.handleAdminCategories))
+	mux.HandleFunc("GET /v2/api/admin/services", s.adminAuth(s.handleAdminServices))
+	mux.HandleFunc("POST /v2/api/admin/services", s.adminAuth(s.handleAdminServices))
+	mux.HandleFunc("PUT /v2/api/admin/services/{id}", s.adminAuth(s.handleAdminServiceOne))
+	mux.HandleFunc("DELETE /v2/api/admin/services/{id}", s.adminAuth(s.handleAdminServiceOne))
+	mux.HandleFunc("GET /v2/api/admin/orders", s.adminAuth(s.handleAdminOrders))
+	mux.HandleFunc("POST /v2/api/admin/orders/{id}/status", s.adminAuth(s.handleAdminOrderStatus))
+	mux.HandleFunc("GET /v2/api/admin/refunds", s.adminAuth(s.handleAdminRefunds))
+	mux.HandleFunc("POST /v2/api/admin/refunds/{id}/audit", s.adminAuth(s.handleAdminRefundAudit))
+	mux.HandleFunc("GET /v2/api/admin/feedbacks", s.adminAuth(s.handleAdminFeedbacks))
+	mux.HandleFunc("POST /v2/api/admin/feedbacks", s.adminAuth(s.handleAdminFeedbacks))
+	mux.HandleFunc("GET /v2/api/admin/settings", s.adminAuth(s.handleAdminSettings))
+	mux.HandleFunc("POST /v2/api/admin/settings", s.adminAuth(s.handleAdminSettings))
+	mux.HandleFunc("POST /v2/api/admin/upload", s.adminAuth(s.handleAdminUpload))
+
 	return withLogging(ensurePreflight(mux))
 }

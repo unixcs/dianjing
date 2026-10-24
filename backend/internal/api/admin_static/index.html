@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>观星电竞 · 管理后台</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--line:#e5e7eb;--txt:#1f2937;--sub:#6b7280;--pri:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--txt)}
+a{color:var(--pri);text-decoration:none}
+button{font:inherit;cursor:pointer;border:none;border-radius:6px;padding:6px 14px;background:var(--pri);color:#fff}
+button.ghost{background:#fff;color:var(--txt);border:1px solid var(--line)}
+button.danger{background:var(--bad)}
+button:disabled{opacity:.5;cursor:default}
+input,select,textarea{font:inherit;border:1px solid var(--line);border-radius:6px;padding:6px 10px;background:#fff;color:var(--txt)}
+textarea{width:100%;min-height:120px;resize:vertical}
+label{display:block;color:var(--sub);margin:10px 0 4px}
+table{width:100%;border-collapse:collapse;background:var(--card);border-radius:8px;overflow:hidden}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
+th{background:#f9fafb;color:var(--sub);font-weight:500;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;background:#eef2ff;color:#4338ca}
+.tag.g{background:#ecfdf5;color:#047857}.tag.r{background:#fef2f2;color:#b91c1c}
+.tag.y{background:#fffbeb;color:#b45309}.tag.gr{background:#f3f4f6;color:#4b5563}
+#login{max-width:340px;margin:18vh auto;background:var(--card);padding:32px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.06);text-align:center}
+#login h1{font-size:18px;margin-bottom:18px}
+#login input{width:100%;margin-bottom:12px}
+#login button{width:100%}
+#app{display:none;min-height:100vh}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:0 20px;height:50px;display:flex;align-items:center;justify-content:space-between}
+header b{font-size:15px}
+header span{color:var(--sub);font-size:13px;margin-right:12px}
+#layout{display:flex}
+nav{width:150px;padding:16px 10px;flex-shrink:0}
+nav a{display:block;padding:8px 14px;border-radius:8px;color:var(--txt);margin-bottom:2px}
+nav a.on{background:#e0e9ff;color:var(--pri);font-weight:600}
+main{flex:1;padding:20px 24px 60px;max-width:1100px}
+.card{background:var(--card);border-radius:10px;padding:18px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+h2{font-size:16px;margin-bottom:14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.stat{background:var(--card);border-radius:10px;padding:14px 16px}
+.stat b{font-size:22px;display:block}
+.stat span{color:var(--sub);font-size:12px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.hide{display:none!important}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
+.actions{display:flex;gap:6px;flex-wrap:wrap}
+.empty{color:var(--sub);text-align:center;padding:30px 0}
+#toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:8px 18px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:9}
+#toast.err{background:var(--bad)}
+dialog{border:none;border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,.18);padding:22px;width:min(520px,92vw)}
+dialog::backdrop{background:rgba(0,0,0,.35)}
+dialog h3{font-size:15px;margin-bottom:8px}
+dialog input,dialog select,dialog textarea{width:100%}
+.money{font-variant-numeric:tabular-nums}
+@media(max-width:700px){#layout{display:block}nav{display:flex;overflow-x:auto;width:auto;padding:8px}nav a{white-space:nowrap}main{padding:12px}.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="toast"></div>
+
+<div id="login">
+  <h1>观星电竞 · 管理后台</h1>
+  <input id="pwd" type="password" placeholder="管理密码" onkeydown="if(event.key=='Enter')doLogin()">
+  <button onclick="doLogin()">登 录</button>
+</div>
+
+<div id="app">
+<header>
+  <b>观星电竞 · 管理后台</b>
+  <div><span id="who"></span><button class="ghost" onclick="logout()">退出</button></div>
+</header>
+<div id="layout">
+<nav id="nav">
+  <a data-s="overview" class="on" onclick="show('overview')">总览</a>
+  <a data-s="services" onclick="show('services')">服务商品</a>
+  <a data-s="cats" onclick="show('cats')">分类</a>
+  <a data-s="orders" onclick="show('orders')">订单</a>
+  <a data-s="refunds" onclick="show('refunds')">退款</a>
+  <a data-s="feedbacks" onclick="show('feedbacks')">反馈</a>
+  <a data-s="settings" onclick="show('settings')">公告/协议</a>
+</nav>
+<main>
+
+<section id="s-overview">
+  <div class="stats" id="stats"></div>
+</section>
+
+<section id="s-services" class="hide">
+  <div class="card">
+    <div class="row">
+      <h2 style="margin:0">服务商品</h2>
+      <span style="flex:1"></span>
+      <button onclick="editService(0)">+ 新增服务</button>
+    </div>
+    <table id="tb-services"><thead><tr><th>ID</th><th>标题</th><th>价格</th><th>xpay商品ID</th><th>状态</th><th>排序</th><th>操作</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section id="s-cats" class="hide">
+  <div class="card">
+    <div class="row">
+      <h2 style="margin:0">分类</h2>
+      <span style="flex:1"></span>
+      <input id="newcat" placeholder="分类名" style="width:140px">
+      <input id="newcatsort" placeholder="排序" style="width:70px" value="100">
+      <button onclick="addCat()">添加</button>
+    </div>
+    <table id="tb-cats"><thead><tr><th>ID</th><th>名称</th><th>排序</th><th>状态</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section id="s-orders" class="hide">
+  <div class="card">
+    <div class="row">
+      <h2 style="margin:0">订单</h2>
+      <span style="flex:1"></span>
+      <select id="ordst" onchange="loadOrders()">
+        <option value="">全部</option>
+        <option value="0">待支付</option><option value="1">待联系</option>
+        <option value="2">服务中</option><option value="3">已完成</option>
+        <option value="4">已取消</option><option value="5">退款中</option><option value="6">已退款</option>
+      </select>
+    </div>
+    <table id="tb-orders"><thead><tr><th>订单号</th><th>标题</th><th>金额</th><th>状态</th><th>发货</th><th>风控</th><th>时间</th><th>操作</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section id="s-refunds" class="hide">
+  <div class="card">
+    <h2>退款</h2>
+    <table id="tb-refunds"><thead><tr><th>退款单号</th><th>订单号</th><th>金额</th><th>原因</th><th>状态</th><th>模式</th><th>备注</th><th>操作</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section id="s-feedbacks" class="hide">
+  <div class="card">
+    <h2>用户反馈</h2>
+    <table id="tb-fbs"><thead><tr><th>ID</th><th>用户</th><th>类型</th><th>内容</th><th>回复</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section id="s-settings" class="hide">
+  <div class="card">
+    <h2>公告 / 协议</h2>
+    <label>首页公告（留空隐藏）</label>
+    <textarea id="set-notice" style="min-height:60px"></textarea>
+    <div class="grid2">
+      <div><label>隐私协议</label><textarea id="set-docs_privacy" style="min-height:200px"></textarea></div>
+      <div><label>服务政策</label><textarea id="set-docs_service_policy" style="min-height:200px"></textarea></div>
+    </div>
+    <div class="row" style="margin-top:14px"><button onclick="saveSettings()">保存</button></div>
+  </div>
+</section>
+
+</main>
+</div>
+</div>
+
+<dialog id="dlg">
+  <h3 id="dlg-title"></h3>
+  <div id="dlg-body"></div>
+  <div class="row" style="margin-top:16px;justify-content:flex-end">
+    <button class="ghost" onclick="dlg.close()">取消</button>
+    <button id="dlg-ok">确定</button>
+  </div>
+</dialog>
+
+<script>
+const API='/v2/api/admin';
+let TOKEN=localStorage.getItem('dk_admin')||'';
+function $(s){return document.querySelector(s)}
+function h(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function toast(msg,err){const t=$('#toast');t.textContent=msg;t.className=err?'err':'';t.style.opacity=1;clearTimeout(t._t);t._t=setTimeout(()=>t.style.opacity=0,2200)}
+function money(c){return '¥'+(c/100).toFixed(2)}
+function fmt(ts){if(!ts)return '—';const d=new Date(ts*1000);return d.toLocaleString('zh-CN',{hour12:false})}
+async function api(path,opt){
+  opt=opt||{};
+  opt.headers=Object.assign({'X-Admin-Token':TOKEN},opt.headers||{});
+  if(opt.body&&!opt.raw)opt.headers['Content-Type']='application/json';
+  const r=await fetch(API+path,opt);
+  const j=await r.json().catch(()=>({}));
+  if(r.status===401){logout();throw new Error('未登录')}
+  if(!r.ok)throw new Error(j.msg||('HTTP '+r.status));
+  return j;
+}
+async function doLogin(){
+  const pwd=$('#pwd').value;
+  if(!pwd)return toast('请输入密码',1);
+  try{
+    const j=await api('/login',{method:'POST',body:JSON.stringify({password:pwd})});
+    TOKEN=j.token;localStorage.setItem('dk_admin',TOKEN);
+    $('#login').style.display='none';$('#app').style.display='block';show('overview');
+  }catch(e){toast(e.message,1)}
+}
+function logout(){TOKEN='';localStorage.removeItem('dk_admin');$('#app').style.display='none';$('#login').style.display='block'}
+async function show(sec){
+  document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.dataset.s===sec));
+  document.querySelectorAll('main section').forEach(x=>x.classList.add('hide'));
+  $('#s-'+sec).classList.remove('hide');
+  try{
+    if(sec==='overview')await loadOverview();
+    if(sec==='services')await loadServices();
+    if(sec==='cats')await loadCats();
+    if(sec==='orders')await loadOrders();
+    if(sec==='refunds')await loadRefunds();
+    if(sec==='feedbacks')await loadFbs();
+    if(sec==='settings')await loadSettings();
+  }catch(e){toast(e.message,1)}
+}
+async function loadOverview(){
+  const j=await api('/overview');
+  const items=[['用户',j.users_total],['订单',j.orders_total],['待支付',j.orders_pending],['待联系',j.orders_contact],['服务中',j.orders_serving],['已完成',j.orders_done],['退款待处理',j.refunds_pending],['反馈待处理',j.feedbacks_open],['累计收入',money(j.revenue_cents)]];
+  $('#stats').innerHTML=items.map(([k,v])=>`<div class="stat"><b>${h(v)}</b><span>${h(k)}</span></div>`).join('');
+}
+// ---- services ----
+async function loadServices(){
+  const j=await api('/services');
+  const tb=$('#tb-services tbody');
+  tb.innerHTML=j.services.length?j.services.map(s=>`<tr>
+    <td>${s.id}</td><td>${h(s.title)}</td><td class="money">${money(s.price_cents)}</td>
+    <td>${h(s.xpay_product_id)||'<span class="tag gr">未配置</span>'}</td>
+    <td>${s.status?'<span class="tag g">上架</span>':'<span class="tag gr">下架</span>'}</td>
+    <td>${s.sort}</td>
+    <td><div class="actions"><button class="ghost" onclick='editService(${s.id})'>编辑</button>
+    <button class="ghost" onclick='toggleService(${s.id},${s.status})'>${s.status?'下架':'上架'}</button></div></td></tr>`).join('')
+    :'<tr><td colspan="7" class="empty">暂无服务</td></tr>';
+}
+function catOptions(cid){return api('/categories').then(j=>j.categories.map(c=>`<option value="${c.id}" ${c.id==cid?'selected':''}>${h(c.name)}</option>`).join(''))}
+async function editService(id){
+  const list=await (await fetch(API+'/services',{headers:{'X-Admin-Token':TOKEN}})).json();
+  const s=list.services.find(x=>x.id===id)||{price_cents:0,sort:100,status:1,sales_base:0,category_id:0,xpay_env:0};
+  $('#dlg-title').textContent=id?'编辑服务 #'+id:'新增服务';
+  $('#dlg-body').innerHTML=`
+    <label>标题</label><input id="f-title" value="${h(s.title)}">
+    <label>分类</label><select id="f-cat">${await catOptions(s.category_id)}</select>
+    <label>价格（分）</label><input id="f-price" type="number" value="${s.price_cents}">
+    <label>封面图 URL（可留空）</label><input id="f-cover" value="${h(s.cover)}">
+    <label>销量基数</label><input id="f-sales" type="number" value="${s.sales_base}">
+    <label>xpay 商品 ID（虚拟支付必填）</label><input id="f-xpid" value="${h(s.xpay_product_id)}">
+    <label>xpay 环境（0正式 1沙箱）</label><input id="f-xpenv" type="number" value="${s.xpay_env}">
+    <label>排序（小在前）</label><input id="f-sort" type="number" value="${s.sort}">
+    <label>详情（文本，可留空）</label><textarea id="f-content">${h(s.content)}</textarea>`;
+  $('#dlg-ok').onclick=async()=>{
+    try{
+      await api(id?'/services/'+id:'/services',{method:id?'PUT':'POST',body:JSON.stringify({
+        title:$('#f-title').value,category_id:+$('#f-cat').value,price_cents:+$('#f-price').value,
+        cover:$('#f-cover').value,sales_base:+$('#f-sales').value,xpay_product_id:$('#f-xpid').value.trim(),
+        xpay_env:+$('#f-xpenv').value,sort:+$('#f-sort').value,status:s.status,content:$('#f-content').value})});
+      dlg.close();toast('已保存');loadServices();
+    }catch(e){toast(e.message,1)}
+  };
+  dlg.showModal();
+}
+async function toggleService(id,status){
+  try{await api('/services/'+id,{method:'PUT',body:JSON.stringify({status:status?0:1})});loadServices()}
+  catch(e){toast(e.message,1)}
+}
+// ---- categories ----
+async function loadCats(){
+  const j=await api('/categories');
+  $('#tb-cats tbody').innerHTML=j.categories.length?j.categories.map(c=>`<tr><td>${c.id}</td><td>${h(c.name)}</td><td>${c.sort}</td><td>${c.status?'<span class="tag g">启用</span>':'<span class="tag gr">停用</span>'}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">暂无分类</td></tr>';
+}
+async function addCat(){
+  try{await api('/categories',{method:'POST',body:JSON.stringify({name:$('#newcat').value,sort:+$('#newcatsort').value||100})});$('#newcat').value='';loadCats()}
+  catch(e){toast(e.message,1)}
+}
+// ---- orders ----
+async function loadOrders(){
+  const st=$('#ordst').value;
+  const j=await api('/orders'+(st?'?status='+st:''));
+  const riskTag=r=>r===1?'<span class="tag r">锁定</span>':r===2?'<span class="tag y">已退款放行</span>':'';
+  const pgTag=v=>v==='success'?'<span class="tag g">已发货</span>':v==='sending'?'<span class="tag y">发货中</span>':v==='failed'?'<span class="tag r">失败</span>':v==='locked'?'<span class="tag r">风控拦截</span>':'';
+  $('#tb-orders tbody').innerHTML=j.orders.length?j.orders.map(o=>`<tr>
+    <td>${h(o.order_no)}</td><td>${h(o.title)}</td><td class="money">${money(o.total_cents)}</td>
+    <td>${h(o.status_text)}</td><td>${pgTag(o.provide_goods_status)||'—'}</td><td>${riskTag(o.risk_status)||''}</td>
+    <td title="支付：${fmt(o.pay_time)}">${fmt(o.created_at)}</td>
+    <td><div class="actions">
+      ${o.status===1?`<button onclick='setStatus(${o.id},2)'>开始服务</button>`:''}
+      ${o.status===2?`<button onclick='setStatus(${o.id},3)'>完成</button>`:''}
+    </div></td></tr>`).join(''):'<tr><td colspan="8" class="empty">暂无订单</td></tr>';
+}
+async function setStatus(id,target){
+  try{await api('/orders/'+id+'/status',{method:'POST',body:JSON.stringify({status:target})});toast('已更新');loadOrders()}
+  catch(e){toast(e.message,1)}
+}
+// ---- refunds ----
+async function loadRefunds(){
+  const j=await api('/refunds');
+  const stTag=s=>({applying:'<span class="tag y">待审核</span>',approved:'<span class="tag">已批准</span>',refunded:'<span class="tag g">已退款</span>',rejected:'<span class="tag r">已拒绝</span>',failed:'<span class="tag r">提交失败</span>'}[s]||h(s));
+  $('#tb-refunds tbody').innerHTML=j.refunds.length?j.refunds.map(r=>`<tr>
+    <td>${h(r.refund_no)}</td><td>${h(r.order_no)}</td><td class="money">${money(r.amount_cents)}</td>
+    <td>${h(r.reason)||'—'}</td><td>${stTag(r.status)}</td><td>${r.mode==='auto'?'自动':'人工'}</td>
+    <td>${h(r.audit_note)||''}</td>
+    <td>${r.status==='applying'?`<div class="actions"><button onclick='audit(${r.id},1)'>同意</button><button class="danger" onclick='audit(${r.id},0)'>拒绝</button></div>`:''}</td></tr>`).join(''):'<tr><td colspan="8" class="empty">暂无退款</td></tr>';
+}
+async function audit(id,approve){
+  let note='';
+  if(!approve){note=prompt('拒绝原因（可留空）')||'';if(note===null)return}
+  try{await api('/refunds/'+id+'/audit',{method:'POST',body:JSON.stringify({approve:!!approve,note})});toast('已处理');loadRefunds()}
+  catch(e){toast(e.message,1)}
+}
+// ---- feedbacks ----
+async function loadFbs(){
+  const j=await api('/feedbacks');
+  $('#tb-fbs tbody').innerHTML=j.feedbacks.length?j.feedbacks.map(f=>`<tr>
+    <td>${f.id}</td><td>${f.user_id}</td><td>${h(f.type)}</td><td style="max-width:260px">${h(f.content)}</td>
+    <td style="max-width:200px">${h(f.reply)||'—'}</td>
+    <td>${f.status?'<span class="tag g">已回复</span>':'<span class="tag y">待处理</span>'}</td>
+    <td><button class="ghost" onclick='replyFb(${f.id},"${h(f.reply).replace(/"/g,'&quot;')}")'>回复</button></td></tr>`).join(''):'<tr><td colspan="7" class="empty">暂无反馈</td></tr>';
+}
+async function replyFb(id,cur){
+  const reply=prompt('回复内容：',cur||'');if(reply===null)return;
+  try{await api('/feedbacks',{method:'POST',body:JSON.stringify({id,reply})});toast('已回复');loadFbs()}
+  catch(e){toast(e.message,1)}
+}
+// ---- settings ----
+async function loadSettings(){
+  const j=await api('/settings');
+  $('#set-notice').value=j.notice||'';
+  $('#set-docs_privacy').value=j["docs.privacy"]||'';
+  $('#set-docs_service_policy').value=j["docs.service-policy"]||'';
+}
+async function saveSettings(){
+  try{await api('/settings',{method:'POST',body:JSON.stringify({
+    notice:$('#set-notice').value,
+    "docs.privacy":$('#set-docs_privacy').value,
+    "docs.service-policy":$('#set-docs_service_policy').value})});
+    toast('已保存')}
+  catch(e){toast(e.message,1)}
+}
+// boot: auto-resume session if token still valid
+(async function(){
+  if(!TOKEN)return;
+  try{await api('/overview');$('#login').style.display='none';$('#app').style.display='block';show('overview')}
+  catch(e){/* invalid token: stay on login */}
+})();
+</script>
+</body>
+</html>
