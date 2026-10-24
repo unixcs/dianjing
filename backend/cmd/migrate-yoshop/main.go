@@ -61,6 +61,11 @@ func main() {
 }
 
 func run(o opts) error {
+	// The server's store.Open creates the data dir; this script must not
+	// depend on it having run (fresh-machine migration order).
+	if err := os.MkdirAll(o.dataDir, 0o755); err != nil {
+		return err
+	}
 	my, err := sql.Open("mysql", o.dsn+"?charset=utf8mb4&parseTime=false")
 	if err != nil {
 		return err
@@ -518,7 +523,11 @@ func (m *mig) orders() error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return flush()
+	if err := flush(); err != nil {
+		return err
+	}
+	m.add("orders", n)
+	return nil
 }
 
 // orderAgg buffers one legacy order's goods lines. A multi-goods order
