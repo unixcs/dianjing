@@ -1,0 +1,27 @@
+# dianjing backend systemd unit
+# 安装：cp deploy/dianjing.service /etc/systemd/system/ && systemctl daemon-reload
+#       systemctl enable --now dianjing
+[Unit]
+Description=dianjing miniapp backend (Go + SQLite)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/srv/dianjing
+# 配置文件（600 权限，不进 git）：/srv/dianjing/dianjing.env
+# 例：LISTEN=127.0.0.1:8096 / BASE_URL=https://wx.gxwqb.cn / DATA_DIR=/srv/dianjing/data
+EnvironmentFile=/srv/dianjing/dianjing.env
+ExecStart=/srv/dianjing/dianjing-server
+Restart=on-failure
+RestartSec=2
+
+# 加固：仅写自己的数据目录
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/dianjing/data
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
