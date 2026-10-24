@@ -56,7 +56,11 @@ Page({
   // 再次支付（待支付订单）
   onPay(e) {
     const id = e.currentTarget.dataset.id;
-    request({ url: '/v2/api/orders/' + id + '/pay', method: 'POST' })
+    const a = getApp();
+    a.getPayCode()
+      .then((code) => request({
+        url: '/v2/api/orders/' + id + '/pay?login_code=' + code, method: 'POST',
+      }))
       .then((params) => this.requestPayment(params, id))
       .catch(toastError);
   },
@@ -66,7 +70,10 @@ Page({
       wx.requestVirtualPayment({
         ...params,
         success: resolve,
-        fail: (res) => reject(Object.assign(new Error(res.errMsg || '支付未完成'), { cancelled: true })),
+        fail: (res) => reject(Object.assign(
+          new Error(res.errMsg || '支付未完成'),
+          { cancelled: /cancel/i.test(res.errMsg || '') },
+        )),
       });
     })
       .then(() => request({ url: '/v2/api/orders/' + id + '/confirm-pay', method: 'POST' }))
@@ -76,7 +83,11 @@ Page({
       })
       .catch((e) => {
         if (e.cancelled) return;
-        toastError(e);
+        wx.showModal({
+          title: '支付状态确认中',
+          content: (e.message || '') + '，可稍后刷新订单查看进度',
+          showCancel: false,
+        });
         this.fetch();
       });
   },

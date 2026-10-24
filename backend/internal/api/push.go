@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,9 +93,24 @@ func (s *Server) handleWxMsgPost(w http.ResponseWriter, r *http.Request) {
 		}
 		payload = decodePushBody(string(plain))
 	} else {
-		// Plaintext mode: signature over token/timestamp/nonce.
+		// Plaintext mode: signature over token/timestamp/nonce only — the
+		// body is NOT covered, so replay resistance comes from a ±5min
+		// timestamp window plus a nonce cache (a captured triple cannot be
+		// replayed later with a forged body).
 		if !s.verifyPushSource(q.Get("signature"), ts, nonce) {
 			writeJSON(w, http.StatusOK, map[string]any{"ErrCode": 1, "ErrMsg": "签名校验失败"})
+			return
+		}
+		if tsi, err := strconv.ParseInt(ts, 10, 64); err != nil ||
+			abs64(time.Now().Unix()-tsi) > 300 {
+			s.St.Event("push.stale_ts", "", 0, ts)
+			writeJSON(w, http.StatusOK, map[string]any{"ErrCode": 1, "ErrMsg": "时间戳过期"})
+			return
+		}
+		if s.pushNonceSeen(ts + "|" + nonce) {
+			// WeChat retries with the same nonce after non-zero ErrCode
+			// replies; acknowledge without reprocessing (ticker converges).
+			writeJSON(w, http.StatusOK, map[string]any{"ErrCode": 0, "ErrMsg": "success"})
 			return
 		}
 		payload = data
@@ -181,6 +197,10 @@ func (s *Server) onRefundNotify(payload map[string]any) {
 		s.St.Event("push.refund_nonzero", "order", o.ID, fmt.Sprintf(`{"ret":%v}`, retCode))
 		return
 	}
+	if !envMatches(s.Cfg.XPaySandbox, payload) {
+		s.St.Event("push.env_mismatch", "order", o.ID, "")
+		return
+	}
 	s.App.MarkRefundedFromPush(o.OrderNo)
 }
 
@@ -209,6 +229,35 @@ func (s *Server) verifyPushSource(signature, ts, nonce string) bool {
 	return xpay.VerifyPlaintextSig(token, signature, ts, nonce)
 }
 
+// pushNonceSeen records a (timestamp|nonce) pair for 10 minutes and
+// reports whether it was already seen. Single-process in-memory cache is
+// sufficient: WeChat retries land on this one instance.
+func (s *Server) pushNonceSeen(key string) bool {
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	if s.pushNonce == nil {
+		s.pushNonce = map[string]int64{}
+	}
+	now := time.Now().Unix()
+	for k, exp := range s.pushNonce {
+		if exp < now {
+			delete(s.pushNonce, k)
+		}
+	}
+	if _, dup := s.pushNonce[key]; dup {
+		return true
+	}
+	s.pushNonce[key] = now + 600
+	return false
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 // replyPush writes the JSON response body (the miniapp push config uses
 // JSON; legacy XML responses are out of scope).
 func replyPush(w http.ResponseWriter, body any) {
@@ -216,10 +265,12 @@ func replyPush(w http.ResponseWriter, body any) {
 }
 
 // envMatches checks a push Env against the configured sandbox flag.
+// Missing Env is fatal (ported assertVirtualNotifyEnv): a pay/refund push
+// without a verifiable env must not converge money state.
 func envMatches(sandbox bool, payload map[string]any) bool {
 	env, ok := payload["Env"].(float64)
 	if !ok {
-		return true // no Env field: accept (ported assertVirtualNotifyEnv)
+		return false
 	}
 	return int(env) == xpay.EnvSandboxInt(sandbox)
 }

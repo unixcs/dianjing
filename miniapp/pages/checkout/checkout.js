@@ -40,7 +40,7 @@ Page({
   },
 
   onQuantity(e) {
-    const v = Math.min(10, Math.max(1, Number(e.detail.value) || 1));
+    const v = Math.floor(Math.min(10, Math.max(1, Number(e.detail.value) || 1)));
     this.setData({ quantity: v });
     this.updateTotal();
   },
@@ -53,6 +53,7 @@ Page({
     if (this.data.submitting || this.data.payStatus) return;
     const { svc, quantity, contact } = this.data;
     if (!svc) return;
+    const a = getApp();
     this.setData({ submitting: true });
     let orderId = 0;
     request({
@@ -61,15 +62,23 @@ Page({
     })
       .then((d) => {
         orderId = d.order_id;
-        return request({ url: '/v2/api/orders/' + orderId + '/pay', method: 'POST' });
+        // 支付前先 wx.login 换新 code：后端用它换取新鲜 session_key 签名
+        return a.getPayCode();
       })
+      .then((code) => request({
+        url: '/v2/api/orders/' + orderId + '/pay?login_code=' + code, method: 'POST',
+      }))
       .then((params) => {
         this.setData({ submitting: false, payStatus: 'paying' });
         return new Promise((resolve, reject) => {
           wx.requestVirtualPayment({
             ...params,
             success: resolve,
-            fail: (res) => reject(Object.assign(new Error(res.errMsg || '支付未完成'), { cancelled: true })),
+            // 只有 errMsg 含 cancel 才算用户主动取消；其余失败要透出原因
+            fail: (res) => reject(Object.assign(
+              new Error(res.errMsg || '支付未完成'),
+              { cancelled: /cancel/i.test(res.errMsg || '') },
+            )),
           });
         });
       })

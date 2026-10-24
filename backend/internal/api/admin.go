@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -50,12 +51,12 @@ func (s *Server) verifyAdminToken(token string) bool {
 
 func (s *Server) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("X-Admin-Token")
-		if token == "" {
-			if c, err := r.Cookie("admin_token"); err == nil {
-				token = c.Value
-			}
+		// Fail closed: an empty hash would make the HMAC secret a constant.
+		if s.Cfg.AdminPasswordHash == "" {
+			fail(w, http.StatusInternalServerError, "管理密码未配置")
+			return
 		}
+		token := r.Header.Get("X-Admin-Token")
 		if token == "" || !s.verifyAdminToken(token) {
 			fail(w, http.StatusUnauthorized, "未登录")
 			return
@@ -85,10 +86,6 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := time.Now().Unix() + s.Cfg.AdminSessionTTL
-	http.SetCookie(w, &http.Cookie{
-		Name: "admin_token", Value: s.adminToken(expires),
-		Path: "/v2/admin", HttpOnly: true, MaxAge: int(s.Cfg.AdminSessionTTL),
-	})
 	okJSON(w, map[string]any{"token": s.adminToken(expires), "expires_at": expires})
 }
 
@@ -219,13 +216,13 @@ func (s *Server) adminSaveService(w http.ResponseWriter, r *http.Request, id int
 		v, _ := req[k].(string)
 		return v
 	}
-	title := app.TruncateStr(strings.TrimSpace(getStr("title")), 50)
-	if title == "" {
-		failMsg(w, "标题不能为空")
-		return
-	}
 	now := store.Now()
 	if id == 0 {
+		title := app.TruncateStr(strings.TrimSpace(getStr("title")), 50)
+		if title == "" {
+			failMsg(w, "标题不能为空")
+			return
+		}
 		res, err := s.St.DB.Exec(`INSERT INTO services (category_id,title,cover,price_cents,sales_base,content,xpay_product_id,xpay_env,status,sort,created_at,updated_at)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 			getInt("category_id", 0), title, getStr("cover"), getInt("price_cents", 0),
@@ -237,17 +234,52 @@ func (s *Server) adminSaveService(w http.ResponseWriter, r *http.Request, id int
 		}
 		id, _ = res.LastInsertId()
 		s.St.Event("admin.service.create", "service", id, title)
-	} else {
-		_, err := s.St.DB.Exec(`UPDATE services SET category_id=?,title=?,cover=?,price_cents=?,sales_base=?,content=?,xpay_product_id=?,xpay_env=?,status=?,sort=?,updated_at=? WHERE id=?`,
-			getInt("category_id", 0), title, getStr("cover"), getInt("price_cents", 0),
-			getInt("sales_base", 0), getStr("content"), getStr("xpay_product_id"),
-			getInt("xpay_env", 0), getInt("status", 1), getInt("sort", 100), now, id)
-		if err != nil {
-			fail(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		s.St.Event("admin.service.update", "service", id, title)
+		okJSON(w, map[string]any{"id": id})
+		return
 	}
+	// Partial update (PUT): absent fields keep their stored values, so a
+	// narrow request like {status:0} from the toggle button can't blank
+	// the rest of the row.
+	var curCat, curPrice, curBase, curEnv, curStatus, curSort int64
+	var curTitle, curCover, curContent, curProduct string
+	if err := s.St.DB.QueryRow(`SELECT category_id,title,cover,price_cents,sales_base,content,xpay_product_id,xpay_env,status,sort
+		FROM services WHERE id=?`, id).
+		Scan(&curCat, &curTitle, &curCover, &curPrice, &curBase, &curContent, &curProduct, &curEnv, &curStatus, &curSort); err != nil {
+		if isNoRows(err) {
+			fail(w, http.StatusNotFound, "服务不存在")
+		} else {
+			fail(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	title := curTitle
+	if _, ok := req["title"]; ok {
+		title = app.TruncateStr(strings.TrimSpace(getStr("title")), 50)
+	}
+	if title == "" {
+		failMsg(w, "标题不能为空")
+		return
+	}
+	setIf := func(k string, cur int64) int64 {
+		if _, ok := req[k]; ok {
+			return getInt(k, cur)
+		}
+		return cur
+	}
+	setStr := func(k string, cur string) string {
+		if _, ok := req[k]; ok {
+			return getStr(k)
+		}
+		return cur
+	}
+	if _, err := s.St.DB.Exec(`UPDATE services SET category_id=?,title=?,cover=?,price_cents=?,sales_base=?,content=?,xpay_product_id=?,xpay_env=?,status=?,sort=?,updated_at=? WHERE id=?`,
+		setIf("category_id", curCat), title, setStr("cover", curCover), setIf("price_cents", curPrice),
+		setIf("sales_base", curBase), setStr("content", curContent), setStr("xpay_product_id", curProduct),
+		setIf("xpay_env", curEnv), setIf("status", curStatus), setIf("sort", curSort), now, id); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.St.Event("admin.service.update", "service", id, title)
 	okJSON(w, map[string]any{"id": id})
 }
 
@@ -270,18 +302,49 @@ func (s *Server) handleAdminOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	list := []map[string]any{}
+	var os []*app.Order
 	for rows.Next() {
 		o, err := app.ScanOrder(rows)
 		if err != nil {
 			continue
 		}
+		os = append(os, o)
+	}
+	// Batch-load user mobile/nickname for the page (plus the order's own
+	// contact field captured at checkout).
+	um := map[int64][2]string{}
+	seen := map[int64]bool{}
+	var ids []string
+	for _, o := range os {
+		if !seen[o.UserID] {
+			seen[o.UserID] = true
+			ids = append(ids, fmt.Sprint(o.UserID))
+		}
+	}
+	if len(ids) > 0 {
+		urows, err := s.St.DB.Query(`SELECT id,mobile,nickname FROM users WHERE id IN (` +
+			strings.Join(ids, ",") + `)`)
+		if err == nil {
+			for urows.Next() {
+				var id int64
+				var mobile, nickname string
+				if urows.Scan(&id, &mobile, &nickname) == nil {
+					um[id] = [2]string{mobile, nickname}
+				}
+			}
+			urows.Close()
+		}
+	}
+	list := []map[string]any{}
+	for _, o := range os {
 		list = append(list, map[string]any{
 			"id": o.ID, "order_no": o.OrderNo, "user_id": o.UserID,
+			"user_nickname": um[o.UserID][1], "user_mobile": um[o.UserID][0],
 			"title": o.TitleSnapshot, "total_cents": o.TotalCents,
 			"status": o.Status, "status_text": statusText(o.Status),
 			"pay_time": o.PayTime, "created_at": o.CreatedAt,
 			"provide_goods_status": o.ProvideGoodsStatus, "risk_status": o.RiskStatus,
+			"contact": o.Contact,
 		})
 	}
 	okJSON(w, map[string]any{"orders": list})
@@ -299,7 +362,8 @@ func (s *Server) handleAdminOrderStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := s.App.AdminSetStatus(id, req.Status); err != nil {
 		if errors.Is(err, app.ErrConflict) {
-			failMsg(w, "状态流转不允许")
+			// err.Error() carries the specific reason (e.g. risk-locked).
+			failMsg(w, err.Error())
 			return
 		}
 		fail(w, http.StatusInternalServerError, err.Error())
@@ -410,8 +474,8 @@ func (s *Server) adminReplyFeedback(w http.ResponseWriter, r *http.Request) {
 
 // ---- settings (notice / docs) ----
 
-// Keys match what the public /v2/api/docs/{key} endpoint reads.
-var adminSettingKeys = []string{"notice", "docs.privacy", "docs.service-policy"}
+// Keys match what the public /v2/api/docs/{key} endpoint and /home read.
+var adminSettingKeys = []string{"notice", "banners", "docs.privacy", "docs.service-policy"}
 
 func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
@@ -439,6 +503,7 @@ func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
 // ---- upload ----
 
 func (s *Server) handleAdminUpload(w http.ResponseWriter, r *http.Request) {
+	const maxUpload = 8 << 20
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
 		failMsg(w, "上传解析失败")
 		return
@@ -459,18 +524,23 @@ func (s *Server) handleAdminUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	name := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
-	buf := make([]byte, 512)
-	n, _ := f.Read(buf)
-	if n > 0 && !strings.HasPrefix(http.DetectContentType(buf[:n]), "image/") {
-		failMsg(w, "文件内容不是图片")
-		return
-	}
-	if _, err := f.Seek(0, 0); err != nil {
+	// Hard cap on total size (ParseMultipartForm's memory limit only
+	// controls the in-memory threshold, larger bodies spool to disk).
+	data, err := io.ReadAll(io.LimitReader(f, maxUpload+1))
+	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if _, err := store.SaveUpload(s.Cfg.DataDir, name, f); err != nil {
+	if len(data) > maxUpload {
+		failMsg(w, "图片不能超过 8MB")
+		return
+	}
+	if len(data) == 0 || !strings.HasPrefix(http.DetectContentType(data), "image/") {
+		failMsg(w, "文件内容不是图片")
+		return
+	}
+	name := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
+	if _, err := store.SaveUpload(s.Cfg.DataDir, name, bytes.NewReader(data)); err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}

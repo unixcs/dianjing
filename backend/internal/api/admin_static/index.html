@@ -123,7 +123,7 @@ dialog input,dialog select,dialog textarea{width:100%}
         <option value="4">已取消</option><option value="5">退款中</option><option value="6">已退款</option>
       </select>
     </div>
-    <table id="tb-orders"><thead><tr><th>订单号</th><th>标题</th><th>金额</th><th>状态</th><th>发货</th><th>风控</th><th>时间</th><th>操作</th></tr></thead><tbody></tbody></table>
+    <table id="tb-orders"><thead><tr><th>订单号</th><th>用户</th><th>联系方式</th><th>标题</th><th>金额</th><th>状态</th><th>发货</th><th>风控</th><th>时间</th><th>操作</th></tr></thead><tbody></tbody></table>
   </div>
 </section>
 
@@ -143,9 +143,11 @@ dialog input,dialog select,dialog textarea{width:100%}
 
 <section id="s-settings" class="hide">
   <div class="card">
-    <h2>公告 / 协议</h2>
+    <h2>公告 / 协议 / Banner</h2>
     <label>首页公告（留空隐藏）</label>
     <textarea id="set-notice" style="min-height:60px"></textarea>
+    <label>首页轮播 Banner（JSON 数组，image 必填；示例：[{"image":"/uploads/xxx.png","url":"/pages/category/category"}]，留空隐藏）</label>
+    <textarea id="set-banners" style="min-height:80px" placeholder='[{"image":"/uploads/xxx.png","url":""}]'></textarea>
     <div class="grid2">
       <div><label>隐私协议</label><textarea id="set-docs_privacy" style="min-height:200px"></textarea></div>
       <div><label>服务政策</label><textarea id="set-docs_service_policy" style="min-height:200px"></textarea></div>
@@ -171,7 +173,7 @@ dialog input,dialog select,dialog textarea{width:100%}
 const API='/v2/api/admin';
 let TOKEN=localStorage.getItem('dk_admin')||'';
 function $(s){return document.querySelector(s)}
-function h(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function h(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function toast(msg,err){const t=$('#toast');t.textContent=msg;t.className=err?'err':'';t.style.opacity=1;clearTimeout(t._t);t._t=setTimeout(()=>t.style.opacity=0,2200)}
 function money(c){return '¥'+(c/100).toFixed(2)}
 function fmt(ts){if(!ts)return '—';const d=new Date(ts*1000);return d.toLocaleString('zh-CN',{hour12:false})}
@@ -239,7 +241,6 @@ async function editService(id){
     <label>封面图 URL（可留空）</label><input id="f-cover" value="${h(s.cover)}">
     <label>销量基数</label><input id="f-sales" type="number" value="${s.sales_base}">
     <label>xpay 商品 ID（虚拟支付必填）</label><input id="f-xpid" value="${h(s.xpay_product_id)}">
-    <label>xpay 环境（0正式 1沙箱）</label><input id="f-xpenv" type="number" value="${s.xpay_env}">
     <label>排序（小在前）</label><input id="f-sort" type="number" value="${s.sort}">
     <label>详情（文本，可留空）</label><textarea id="f-content">${h(s.content)}</textarea>`;
   $('#dlg-ok').onclick=async()=>{
@@ -247,7 +248,7 @@ async function editService(id){
       await api(id?'/services/'+id:'/services',{method:id?'PUT':'POST',body:JSON.stringify({
         title:$('#f-title').value,category_id:+$('#f-cat').value,price_cents:+$('#f-price').value,
         cover:$('#f-cover').value,sales_base:+$('#f-sales').value,xpay_product_id:$('#f-xpid').value.trim(),
-        xpay_env:+$('#f-xpenv').value,sort:+$('#f-sort').value,status:s.status,content:$('#f-content').value})});
+        sort:+$('#f-sort').value,status:s.status,content:$('#f-content').value})});
       dlg.close();toast('已保存');loadServices();
     }catch(e){toast(e.message,1)}
   };
@@ -273,13 +274,15 @@ async function loadOrders(){
   const riskTag=r=>r===1?'<span class="tag r">锁定</span>':r===2?'<span class="tag y">已退款放行</span>':'';
   const pgTag=v=>v==='success'?'<span class="tag g">已发货</span>':v==='sending'?'<span class="tag y">发货中</span>':v==='failed'?'<span class="tag r">失败</span>':v==='locked'?'<span class="tag r">风控拦截</span>':'';
   $('#tb-orders tbody').innerHTML=j.orders.length?j.orders.map(o=>`<tr>
-    <td>${h(o.order_no)}</td><td>${h(o.title)}</td><td class="money">${money(o.total_cents)}</td>
+    <td>${h(o.order_no)}</td>
+    <td>${h(o.user_nickname||('#'+o.user_id))}${o.user_mobile?'<br><span style="color:var(--sub)">'+h(o.user_mobile)+'</span>':''}</td>
+    <td>${h(o.contact)||'—'}</td><td>${h(o.title)}</td><td class="money">${money(o.total_cents)}</td>
     <td>${h(o.status_text)}</td><td>${pgTag(o.provide_goods_status)||'—'}</td><td>${riskTag(o.risk_status)||''}</td>
     <td title="支付：${fmt(o.pay_time)}">${fmt(o.created_at)}</td>
     <td><div class="actions">
       ${o.status===1?`<button onclick='setStatus(${o.id},2)'>开始服务</button>`:''}
       ${o.status===2?`<button onclick='setStatus(${o.id},3)'>完成</button>`:''}
-    </div></td></tr>`).join(''):'<tr><td colspan="8" class="empty">暂无订单</td></tr>';
+    </div></td></tr>`).join(''):'<tr><td colspan="10" class="empty">暂无订单</td></tr>';
 }
 async function setStatus(id,target){
   try{await api('/orders/'+id+'/status',{method:'POST',body:JSON.stringify({status:target})});toast('已更新');loadOrders()}
@@ -297,34 +300,52 @@ async function loadRefunds(){
 }
 async function audit(id,approve){
   let note='';
-  if(!approve){note=prompt('拒绝原因（可留空）')||'';if(note===null)return}
+  if(!approve){
+    const n=prompt('拒绝原因（可留空）','');
+    if(n===null)return; // 用户点了取消，不执行拒绝
+    note=n;
+  }
   try{await api('/refunds/'+id+'/audit',{method:'POST',body:JSON.stringify({approve:!!approve,note})});toast('已处理');loadRefunds()}
   catch(e){toast(e.message,1)}
 }
 // ---- feedbacks ----
+let _fbs=[];
 async function loadFbs(){
   const j=await api('/feedbacks');
-  $('#tb-fbs tbody').innerHTML=j.feedbacks.length?j.feedbacks.map(f=>`<tr>
+  _fbs=j.feedbacks||[];
+  $('#tb-fbs tbody').innerHTML=_fbs.length?_fbs.map(f=>`<tr>
     <td>${f.id}</td><td>${f.user_id}</td><td>${h(f.type)}</td><td style="max-width:260px">${h(f.content)}</td>
     <td style="max-width:200px">${h(f.reply)||'—'}</td>
     <td>${f.status?'<span class="tag g">已回复</span>':'<span class="tag y">待处理</span>'}</td>
-    <td><button class="ghost" onclick='replyFb(${f.id},"${h(f.reply).replace(/"/g,'&quot;')}")'>回复</button></td></tr>`).join(''):'<tr><td colspan="7" class="empty">暂无反馈</td></tr>';
+    <td><button class="ghost" onclick='replyFb(${f.id})'>回复</button></td></tr>`).join(''):'<tr><td colspan="7" class="empty">暂无反馈</td></tr>';
 }
-async function replyFb(id,cur){
-  const reply=prompt('回复内容：',cur||'');if(reply===null)return;
-  try{await api('/feedbacks',{method:'POST',body:JSON.stringify({id,reply})});toast('已回复');loadFbs()}
-  catch(e){toast(e.message,1)}
+function replyFb(id){
+  const f=_fbs.find(x=>x.id===id)||{};
+  const reply=prompt('回复内容：',f.reply||'');if(reply===null)return;
+  api('/feedbacks',{method:'POST',body:JSON.stringify({id,reply})})
+    .then(()=>{toast('已回复');loadFbs()})
+    .catch(e=>toast(e.message,1));
 }
 // ---- settings ----
 async function loadSettings(){
   const j=await api('/settings');
   $('#set-notice').value=j.notice||'';
+  $('#set-banners').value=j.banners||'';
   $('#set-docs_privacy').value=j["docs.privacy"]||'';
   $('#set-docs_service_policy').value=j["docs.service-policy"]||'';
 }
 async function saveSettings(){
+  const bannersRaw=$('#set-banners').value.trim();
+  if(bannersRaw){
+    try{
+      const arr=JSON.parse(bannersRaw);
+      if(!Array.isArray(arr))throw new Error('必须是数组');
+      for(const b of arr){if(!b||typeof b.image!=='string'||!b.image)throw new Error('每项需含 image 字段')}
+    }catch(e){return toast('Banner JSON 无效：'+e.message,1)}
+  }
   try{await api('/settings',{method:'POST',body:JSON.stringify({
     notice:$('#set-notice').value,
+    banners:bannersRaw,
     "docs.privacy":$('#set-docs_privacy').value,
     "docs.service-policy":$('#set-docs_service_policy').value})});
     toast('已保存')}

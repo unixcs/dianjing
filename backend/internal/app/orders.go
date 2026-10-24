@@ -3,7 +3,9 @@
 package app
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -52,6 +54,7 @@ type Order struct {
 	RiskStatus         int
 	RiskSource         string
 	CancelReason       string
+	Contact            string
 	PayTime            int64
 	CompleteTime       int64
 	CreatedAt          int64
@@ -60,14 +63,14 @@ type Order struct {
 
 const orderCols = `id,order_no,user_id,service_id,title_snapshot,cover_snapshot,price_cents,quantity,total_cents,
 	status,pay_order_id,transaction_id,pay_snapshot,provide_goods_status,risk_status,risk_source,cancel_reason,
-	pay_time,complete_time,created_at,updated_at`
+	contact,pay_time,complete_time,created_at,updated_at`
 
 func scanOrder(row *sql.Row) (*Order, error) {
 	var o Order
 	err := row.Scan(&o.ID, &o.OrderNo, &o.UserID, &o.ServiceID, &o.TitleSnapshot, &o.CoverSnapshot,
 		&o.PriceCents, &o.Quantity, &o.TotalCents, &o.Status, &o.PayOrderID, &o.TransactionID,
 		&o.PaySnapshot, &o.ProvideGoodsStatus, &o.RiskStatus, &o.RiskSource, &o.CancelReason,
-		&o.PayTime, &o.CompleteTime, &o.CreatedAt, &o.UpdatedAt)
+		&o.Contact, &o.PayTime, &o.CompleteTime, &o.CreatedAt, &o.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -118,14 +121,16 @@ func (a *App) CreateOrder(userID, serviceID, quantity int64, clientToken, contac
 	orderNo := genOrderNo()
 	res, err := a.St.DB.Exec(`INSERT INTO orders
 		(order_no,client_token,user_id,service_id,title_snapshot,cover_snapshot,price_cents,quantity,total_cents,
-		 status,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 status,contact,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		orderNo, clientToken, userID, sv.ID, sv.Title, sv.Cover, sv.PriceCents, quantity, total,
-		OrderPendingPay, now, now)
+		OrderPendingPay, TruncateStr(contact, 100), now, now)
 	if err != nil {
-		// unique index on client_token => duplicate submit
+		// unique index on client_token => duplicate submit; the lookup is
+		// scoped to this user so another user's token can never be replayed
+		// into someone else's order.
 		var existing Order
-		if clientToken != "" && readOrderErr(a.St, clientToken, &existing) == nil {
+		if clientToken != "" && readOrderErr(a.St, userID, clientToken, &existing) == nil {
 			return &existing, nil
 		}
 		return nil, err
@@ -136,8 +141,9 @@ func (a *App) CreateOrder(userID, serviceID, quantity int64, clientToken, contac
 	return a.OrderByID(id)
 }
 
-func readOrderErr(s *store.Store, clientToken string, out *Order) error {
-	row := s.DB.QueryRow(`SELECT `+orderCols+` FROM orders WHERE client_token=?`, clientToken)
+func readOrderErr(s *store.Store, userID int64, clientToken string, out *Order) error {
+	row := s.DB.QueryRow(`SELECT `+orderCols+` FROM orders WHERE client_token=? AND user_id=?`,
+		clientToken, userID)
 	o, err := scanOrder(row)
 	if err == nil {
 		*out = *o
@@ -185,78 +191,85 @@ func (a *App) Cancel(orderID int64, reason string) error {
 }
 
 // MarkPaid moves a confirmed-paid order into 待联系. Idempotent: calling
-// twice or out of order is safe.
+// twice or out of order is safe. A locally-cancelled order that WeChat
+// actually charged (the cashier was still open when we timed out) is
+// revived here — money received must be delivered, and the guarded
+// status IN clause keeps it from clobbering any other transition.
 func (a *App) MarkPaid(orderID int64, payOrderID, transactionID string) error {
 	o, err := a.OrderByID(orderID)
 	if err != nil {
 		return err
 	}
-	if o.Status == OrderContact || o.Status == OrderServing || o.Status == OrderDone {
+	if o.Status == OrderContact || o.Status == OrderServing || o.Status == OrderDone || o.Status == OrderRefunding {
 		return nil // already converged
 	}
-	if o.Status != OrderPendingPay {
+	if o.Status != OrderPendingPay && o.Status != OrderCancelled {
 		return ErrConflict
 	}
 	now := store.Now()
-	_, err = a.St.DB.Exec(`UPDATE orders SET status=?, pay_order_id=?, transaction_id=?,
-		pay_time=?, updated_at=? WHERE id=? AND status=?`,
-		OrderContact, payOrderID, transactionID, now, now, orderID, OrderPendingPay)
+	res, err := a.St.DB.Exec(`UPDATE orders SET status=?, pay_order_id=?, transaction_id=?,
+		pay_time=?, cancel_reason='', updated_at=? WHERE id=? AND status IN (?,?)`,
+		OrderContact, payOrderID, transactionID, now, now, orderID, OrderPendingPay, OrderCancelled)
 	if err != nil {
 		return err
 	}
-	a.St.Event("order.paid", "order", orderID, fmt.Sprintf(`{"pay_order_id":%q}`, payOrderID))
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConflict // raced with a concurrent transition
+	}
+	a.St.DB.Exec(`UPDATE services SET sales_actual=sales_actual+? WHERE id=?`, o.Quantity, o.ServiceID)
+	a.St.Event("order.paid", "order", orderID,
+		fmt.Sprintf(`{"pay_order_id":%q,"from_status":%d}`, payOrderID, o.Status))
 	return nil
 }
 
 // AdminSetStatus lets the operator advance 待联系 → 服务中 → 已完成.
+// The write carries the expected from-status so a concurrent paid/refund
+// transition can never be silently overwritten (P0: unguarded UPDATE).
 func (a *App) AdminSetStatus(orderID int64, target int) error {
 	o, err := a.OrderByID(orderID)
 	if err != nil {
 		return err
 	}
-	valid := map[int][]int{
-		OrderContact: {OrderServing},
-		OrderServing: {OrderDone, OrderContact},
-		OrderDone:    {}, // terminal; refunds handled separately
-	}[target]
-	allowed := false
-	for _, from := range append(valid, target) {
-		if o.Status == from {
-			allowed = true
-			break
-		}
+	if o.RiskStatus == RiskLocked {
+		return fmt.Errorf("%w：订单已被风控锁定（Apple 退款问询处理中），暂不可变更状态", ErrConflict)
 	}
-	// allowed transitions into target: Contact->Serving, Serving->Done
-	if !allowed {
-		if (target == OrderServing && o.Status == OrderContact) ||
-			(target == OrderDone && o.Status == OrderServing) {
-			allowed = true
-		}
-	}
-	if !allowed {
+	allowed := (target == OrderServing && o.Status == OrderContact) ||
+		(target == OrderDone && o.Status == OrderServing) ||
+		(target == OrderContact && o.Status == OrderServing)
+	if !allowed || o.Status == target {
 		return ErrConflict
 	}
 	now := store.Now()
+	var res sql.Result
 	if target == OrderDone {
-		if _, err := a.St.DB.Exec(`UPDATE orders SET status=?, complete_time=?, updated_at=? WHERE id=?`,
-			target, now, now, orderID); err != nil {
-			return err
-		}
+		res, err = a.St.DB.Exec(`UPDATE orders SET status=?, complete_time=?, updated_at=? WHERE id=? AND status=?`,
+			target, now, now, orderID, o.Status)
 	} else {
-		if _, err := a.St.DB.Exec(`UPDATE orders SET status=?, updated_at=? WHERE id=?`,
-			target, now, orderID); err != nil {
-			return err
-		}
+		res, err = a.St.DB.Exec(`UPDATE orders SET status=?, updated_at=? WHERE id=? AND status=?`,
+			target, now, orderID, o.Status)
+	}
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConflict
 	}
 	a.St.Event("order.status", "order", orderID, fmt.Sprintf(`{"from":%d,"to":%d}`, o.Status, target))
 	return nil
 }
 
+// transit performs a guarded status transition: the UPDATE matches the
+// status the caller read, so a racing write (e.g. MarkPaid winning over a
+// timeout-cancel) fails loudly instead of clobbering it.
 func (a *App) transit(o *Order, target int, eventJSON string) error {
 	now := store.Now()
-	_, err := a.St.DB.Exec(`UPDATE orders SET status=?, updated_at=? WHERE id=?`, target, now, o.ID)
+	res, err := a.St.DB.Exec(`UPDATE orders SET status=?, updated_at=? WHERE id=? AND status=?`,
+		target, now, o.ID, o.Status)
 	if err != nil {
 		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConflict
 	}
 	a.St.Event("order.transit", "order", o.ID, fmt.Sprintf(`{"from":%d,"to":%d}%s`, o.Status, target, eventJSON))
 	return nil
@@ -280,9 +293,22 @@ func RefundModeFor(o *Order, activeRefundExists bool) string {
 	return RefundModeAudit // serving
 }
 
+// randIntn returns a cryptographically random value in [0,n).
+func randIntn(n int) int {
+	var b [4]byte
+	rand.Read(b[:])
+	v := int(binary.LittleEndian.Uint32(b[:])) % n
+	if v < 0 {
+		v = -v
+	}
+	return v
+}
+
 func genOrderNo() string {
-	// 20-digit numeric out_trade_no compatible with xpay: ts + random
-	return fmt.Sprintf("%d%04d", time.Now().UnixNano()/1000, time.Now().UnixNano()%10000%10000)
+	// 20-digit numeric out_trade_no compatible with xpay: microsecond ts +
+	// 4 random digits (the random suffix avoids same-second collisions;
+	// the UNIQUE index turns any residual collision into a retryable error).
+	return fmt.Sprintf("%d%04d", time.Now().UnixNano()/1000, randIntn(10000))
 }
 
 func (a *App) HasActiveRefund(orderID int64) bool {

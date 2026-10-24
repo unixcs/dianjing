@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"dianjing/backend/internal/app"
@@ -26,6 +27,10 @@ type Server struct {
 	St   *store.Store
 	App  *app.App
 	XPay *xpay.Client
+
+	// plaintext-push replay cache (see push.go pushNonceSeen)
+	pushMu    sync.Mutex
+	pushNonce map[string]int64
 }
 
 // ---- response helpers ----
@@ -94,6 +99,12 @@ func (s *Server) verifyToken(token string) (int64, error) {
 // userAuth wraps a handler requiring a valid Bearer token of an active user.
 func (s *Server) userAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Fail closed: an empty token secret (both signing inputs missing)
+		// would make every token verifiable as the degenerate constant.
+		if s.Cfg.XPayAppKey == "" && s.Cfg.WxAppSecret == "" {
+			fail(w, http.StatusInternalServerError, "服务端未配置签名密钥")
+			return
+		}
 		h := r.Header.Get("Authorization")
 		if !strings.HasPrefix(h, "Bearer ") {
 			fail(w, http.StatusUnauthorized, "未登录")

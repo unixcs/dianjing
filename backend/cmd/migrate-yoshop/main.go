@@ -1,8 +1,10 @@
 // migrate-yoshop: one-shot MySQL (YoShop) → SQLite (dianjing) importer.
 //
-// Idempotent: rows are keyed by their legacy IDs into the same autoincrement
-// PKs, so re-running overwrites in place (INSERT OR REPLACE). Run it once
-// before switching traffic and again right before cutover for the delta.
+// Rows are keyed by their legacy IDs into the same autoincrement PKs, so
+// re-running overwrites in place (INSERT OR REPLACE). The intended flow:
+// one full run before switching traffic, then one -force delta run right
+// before cutover. A completed migration sets a settings marker; further
+// runs refuse without -force so a stray rerun can't clobber live data.
 //
 // Source of truth for legacy enums:
 //
@@ -36,6 +38,7 @@ type opts struct {
 	baseURL   string
 	storeID   int
 	skipFiles bool
+	force     bool
 }
 
 func main() {
@@ -46,6 +49,7 @@ func main() {
 	flag.StringVar(&o.baseURL, "base-url", "", "public base URL for image paths (defaults to setting)")
 	flag.IntVar(&o.storeID, "store", 10001, "legacy store_id to import")
 	flag.BoolVar(&o.skipFiles, "skip-files", false, "do not copy uploads")
+	flag.BoolVar(&o.force, "force", false, "override the completed-migration guard (for the pre-cutover delta refresh)")
 	flag.Parse()
 	if o.dsn == "" {
 		fmt.Fprintln(os.Stderr, "usage: migrate-yoshop -dsn 'user:pass@tcp(127.0.0.1:3306)/yoshop2_prod' [-data ./data] [-uploads /srv/yoshop/shared/uploads]")
@@ -73,6 +77,16 @@ func run(o opts) error {
 	defer sq.Close()
 	if err := bootstrapSchema(sq); err != nil {
 		return err
+	}
+	// Completed-migration fuse: a second run without -force would
+	// overwrite any orders/users created live since the first run.
+	var migratedAt int64
+	sq.QueryRow(`SELECT value FROM settings WHERE key='migrated_at'`).Scan(&migratedAt)
+	if migratedAt > 0 && !o.force {
+		return fmt.Errorf("检测到已完成的历史迁移（migrated_at=%d）；如需刷新到最新数据请加 -force（切换前增量同步）", migratedAt)
+	}
+	if migratedAt > 0 {
+		log.Printf("警告: -force 增量覆盖运行，旧数据将被源库覆盖")
 	}
 
 	tx, err := sq.Begin()
@@ -104,6 +118,11 @@ func run(o opts) error {
 		return fmt.Errorf("settings: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if _, err := sq.Exec(`INSERT INTO settings (key,value) VALUES ('migrated_at',?)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+		fmt.Sprint(time.Now().Unix())); err != nil {
 		return err
 	}
 	if !o.skipFiles {
@@ -193,12 +212,15 @@ func bootstrapSchema(db *sql.DB) error {
 			risk_status INTEGER NOT NULL DEFAULT 0,
 			risk_source TEXT NOT NULL DEFAULT '',
 			cancel_reason TEXT NOT NULL DEFAULT '',
+			contact TEXT NOT NULL DEFAULT '',
 			pay_time INTEGER NOT NULL DEFAULT 0,
 			complete_time INTEGER NOT NULL DEFAULT 0,
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_client_token ON orders(client_token)`,
+		`CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, status, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, id)`,
 		`CREATE TABLE IF NOT EXISTS refunds (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			order_id INTEGER NOT NULL,
@@ -213,6 +235,8 @@ func bootstrapSchema(db *sql.DB) error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_refunds_order ON refunds(order_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_refunds_active ON refunds(order_id) WHERE status IN ('applying','approved')`,
 		`CREATE TABLE IF NOT EXISTS refund_inquiries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			order_id INTEGER NOT NULL DEFAULT 0,
@@ -250,10 +274,20 @@ func bootstrapSchema(db *sql.DB) error {
 			payload TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_ref ON events(kind, ref_id)`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
 			return fmt.Errorf("%w\nstmt: %s", err, s)
+		}
+	}
+	// Column additions for databases bootstrapped by an older version of
+	// this script (CREATE TABLE IF NOT EXISTS never touches them).
+	for _, alt := range []string{
+		`ALTER TABLE orders ADD COLUMN contact TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(alt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("%w\nstmt: %s", err, alt)
 		}
 	}
 	return nil
@@ -444,6 +478,18 @@ func (m *mig) orders() error {
 	}
 	defer rows.Close()
 	n := 0
+	var cur *orderAgg
+	flush := func() error {
+		if cur == nil {
+			return nil
+		}
+		if err := cur.write(m); err != nil {
+			return err
+		}
+		cur = nil
+		n++
+		return nil
+	}
 	for rows.Next() {
 		var id int64
 		var orderNo, goodsName, tradeNo, payload, riskSource string
@@ -457,50 +503,110 @@ func (m *mig) orders() error {
 			&tradeNo, &payTime, &createdAt, &updatedAt, &payload, &riskStatus, &riskSource); err != nil {
 			return err
 		}
-		// map to new state machine:
-		// unpaid → 0; refunded → 6; paid: receipt(已完成)→3, delivered(服务中)→2, else 待联系 1
-		status := int64(0)
-		paid := payStatus == 20
-		refunded := paid && m.orderHasCompletedRefund(orderNo)
-		switch {
-		case !paid:
-			status = 0
-			if orderStatus == 20 {
-				status = 4 // cancelled pre-pay
+		if cur == nil || cur.id != id {
+			if err := flush(); err != nil {
+				return err
 			}
-		case refunded:
-			status = 6
-		case receiptStatus == 20:
-			status = 3
-		case deliveryStatus == 20:
-			status = 2
-		default:
-			status = 1
+			cur = &orderAgg{m: m, id: id, orderNo: orderNo, userID: userID,
+				payPrice: payPrice, payStatus: payStatus, orderStatus: orderStatus,
+				deliveryStatus: deliveryStatus, receiptStatus: receiptStatus,
+				tradeNo: tradeNo, payload: payload, riskStatus: riskStatus, riskSource: riskSource,
+				payTime: payTime.Int64, createdAt: createdAt.Int64, updatedAt: updatedAt.Int64}
 		}
-		// provide_goods: legacy delivery_status 20 means the deliver notify ran.
-		pg := ""
-		if paid && deliveryStatus == 20 && status != 6 {
-			pg = "success"
-		}
-		total := cents(payPrice)
-		if total == 0 {
-			total = cents(goodsPrice) * totalNum
-		}
-		if _, err := m.sq.Exec(`INSERT OR REPLACE INTO orders
-			(id,order_no,client_token,user_id,service_id,title_snapshot,cover_snapshot,price_cents,quantity,total_cents,
-			 status,pay_order_id,transaction_id,pay_snapshot,provide_goods_status,risk_status,risk_source,cancel_reason,
-			 pay_time,complete_time,created_at,updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			id, orderNo, "migrated-"+orderNo, userID, goodsID, goodsName, "", cents(goodsPrice), totalNum, total,
-			status, tradeNo, "", payload, pg,
-			mapLegacyRisk(riskStatus), riskSource, "",
-			payTime.Int64, completeTime(status, payTime.Int64), createdAt.Int64, updatedAt.Int64); err != nil {
-			return err
-		}
-		n++
+		cur.addLine(goodsID, goodsName, goodsPrice, totalNum)
 	}
-	m.add("orders", n)
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return flush()
+}
+
+// orderAgg buffers one legacy order's goods lines. A multi-goods order
+// (bundle) can't map 1:1 onto the single-service model, so it collapses
+// to its highest-priced line with all titles concatenated; the paid
+// total stays authoritative.
+type orderAgg struct {
+	m                                              *mig
+	id                                             int64
+	orderNo                                        string
+	userID                                         int64
+	payPrice                                       float64
+	payStatus, orderStatus, deliveryStatus         int64
+	receiptStatus, riskStatus                      int64
+	riskSource, tradeNo, payload                   string
+	payTime, createdAt, updatedAt                  int64
+	lines                                          int
+	totalNum                                       int64
+	primGoodsID                                    int64
+	primName                                       string
+	primPrice                                      float64
+	names                                          []string
+}
+
+func (b *orderAgg) addLine(goodsID int64, name string, price float64, num int64) {
+	b.lines++
+	b.totalNum += num
+	b.names = append(b.names, name)
+	if b.lines == 1 || price > b.primPrice {
+		b.primGoodsID, b.primName, b.primPrice = goodsID, name, price
+	}
+}
+
+func (b *orderAgg) write(m *mig) error {
+	// map to new state machine:
+	// unpaid → 0; refunded → 6; paid: receipt(已完成)→3, delivered(服务中)→2, else 待联系 1
+	status := int64(0)
+	paid := b.payStatus == 20
+	refunded := paid && m.orderHasCompletedRefund(b.orderNo)
+	switch {
+	case !paid:
+		status = 0
+		if b.orderStatus == 20 {
+			status = 4 // cancelled pre-pay
+		}
+	case refunded:
+		status = 6
+	case b.riskStatus == 20:
+		// legacy Apple-refund channel: risk already says refunded even
+		// though no completed refund row exists
+		status = 6
+	case b.receiptStatus == 20:
+		status = 3
+	case b.deliveryStatus == 20:
+		status = 2
+	default:
+		status = 1
+	}
+	// provide_goods: legacy delivery_status 20 means the deliver notify ran.
+	pg := ""
+	if paid && b.deliveryStatus == 20 && status != 6 {
+		pg = "success"
+	}
+	title := b.primName
+	if b.lines > 1 {
+		title = Trunc(fmt.Sprintf("%s 等%d件商品", b.primName, b.lines), 100)
+		log.Printf("orders: order %d (%s) 含 %d 行商品，已聚合为主商品「%s」", b.id, b.orderNo, b.lines, b.primName)
+	}
+	total := cents(b.payPrice)
+	if total == 0 {
+		total = cents(b.primPrice) * b.totalNum
+	}
+	quantity := b.totalNum
+	if quantity <= 0 {
+		quantity = 1
+	}
+	if _, err := m.sq.Exec(`INSERT OR REPLACE INTO orders
+		(id,order_no,client_token,user_id,service_id,title_snapshot,cover_snapshot,price_cents,quantity,total_cents,
+		 status,pay_order_id,transaction_id,pay_snapshot,provide_goods_status,risk_status,risk_source,cancel_reason,
+		 pay_time,complete_time,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		b.id, b.orderNo, "migrated-"+b.orderNo, b.userID, b.primGoodsID, title, "", cents(b.primPrice), quantity, total,
+		status, b.tradeNo, "", b.payload, pg,
+		mapLegacyRisk(b.riskStatus), b.riskSource, "",
+		b.payTime, completeTime(status, b.payTime), b.createdAt, b.updatedAt); err != nil {
+		return err
+	}
+	return nil
 }
 
 func cents(v float64) int64 { return int64(v*100 + 0.5) }
@@ -556,28 +662,43 @@ func (m *mig) refunds() error {
 		if err := rows.Scan(&id, &orderID, &orderNo, &money, &applyDesc, &auditStatus, &status, &refuseDesc, &createdAt, &updatedAt); err != nil {
 			return err
 		}
-		// all historical refunds land in a terminal state
+		// Historical refunds land in a terminal state — except audit-approved
+		// ones that never executed: those map to "failed" so the new ticker
+		// re-submits them for real (same order_no/openid, WeChat enforces the
+		// cumulative-refund cap, so double payout is impossible).
 		st := "refunded"
 		note := applyDesc
-		switch status {
-		case 10: // rejected
-			st = "rejected"
-			note = refuseDesc
-		case 30: // cancelled
-			st = "rejected"
-			note = "用户撤销售款申请"
+		submitted := 1
+		switch {
+		case status == 20: // 退款完成
+			st = "refunded"
+		case status == 10: // 审核拒绝
+			st, note = "rejected", refuseDesc
+		case status == 30: // 用户撤销
+			st, note = "rejected", "用户撤销售款申请"
+		case auditStatus == 10:
+			st = "failed"
+			submitted = 0
+			note = "迁移：历史审核通过但未执行的退款，由新系统重试发起"
+		case auditStatus == 20:
+			st, note = "rejected", refuseDesc
 		default:
-			if status == 0 && auditStatus == 0 {
-				st = "rejected" // never audited: treat as closed-no-refund
-				note = "迁移：未审核的历史申请"
-			}
+			st, note = "rejected", "迁移：未审核的历史申请"
+		}
+		// iOS-channel orders (risk-locked/refunded) can't be refunded via
+		// xpay — mark ios_waiting so the ticker waits for App Store instead.
+		iosWaiting := 0
+		var risk int64
+		m.sq.QueryRow(`SELECT risk_status FROM orders WHERE id=?`, orderID).Scan(&risk)
+		if st == "failed" && (risk == 1 || risk == 2) {
+			iosWaiting = 1
 		}
 		refundNo := fmt.Sprintf("RF%s%06d", time.Unix(createdAt.Int64, 0).Format("20060102"), id)
 		if _, err := m.sq.Exec(`INSERT OR REPLACE INTO refunds
 			(id,order_id,refund_no,amount_cents,reason,status,mode,audit_note,ios_waiting,xpay_submitted,created_at,updated_at)
-			VALUES (?,?,?,?,?,?,?,?,0,1,?,?)`,
-			id, orderID, refundNo, cents(money), Trunc(applyDesc, 200), st, "auto", Trunc(note, 200),
-			createdAt.Int64, updatedAt.Int64); err != nil {
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			id, orderID, refundNo, cents(money), Trunc(applyDesc, 200), st, "audit", Trunc(note, 200),
+			iosWaiting, submitted, createdAt.Int64, updatedAt.Int64); err != nil {
 			return err
 		}
 		n++
@@ -637,10 +758,10 @@ func (m *mig) settings() error {
 			ON CONFLICT(key) DO UPDATE SET value=excluded.value`, k, v)
 		return err
 	}
-	if err := set("docs.privacy", privacy); err != nil {
+	if err := set("docs.privacy", stripHTML(privacy)); err != nil {
 		return err
 	}
-	if err := set("docs.service-policy", policy); err != nil {
+	if err := set("docs.service-policy", stripHTML(policy)); err != nil {
 		return err
 	}
 	// notice: legacy wxapp first-login popup doubles as the announcement.

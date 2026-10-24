@@ -1,21 +1,28 @@
 // 统一请求封装：自动带 Bearer token，401 时重登并重放一次。
-const app = getApp();
+// 注意：本模块在 App() 注册之前被 app.js require，
+// 严禁在模块顶层调用 getApp()（会拿到 undefined），只能在函数内取。
+
+function app() {
+  return getApp();
+}
 
 function rawRequest(opts) {
   return new Promise((resolve, reject) => {
+    const a = app();
     const header = { 'Content-Type': 'application/json' };
     const token = wx.getStorageSync('token');
     if (token) header.Authorization = 'Bearer ' + token;
     wx.request({
-      url: (app.globalData.baseUrl || '') + opts.url,
+      url: (a.globalData.baseUrl || '') + opts.url,
       method: opts.method || 'GET',
       data: opts.data || {},
       header,
+      timeout: 15000,
       success(res) {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve(res.data);
-        } else if (res.statusCode === 401 && !opts.noAuth) {
-          app.relogin()
+        } else if (res.statusCode === 401 && !opts.noAuth && !opts._retried) {
+          a.relogin()
             .then(() => rawRequest({ ...opts, _retried: true }))
             .then(resolve)
             .catch(reject);
@@ -34,7 +41,7 @@ function rawRequest(opts) {
 function request(opts) {
   // 登录后才能调的接口先等静默登录完成；noAuth 的直接发。
   if (opts.noAuth) return rawRequest(opts);
-  return app.ensureLogin().then(() => rawRequest(opts));
+  return app().ensureLogin().then(() => rawRequest(opts));
 }
 
 function toastError(err) {

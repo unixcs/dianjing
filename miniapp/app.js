@@ -6,8 +6,9 @@ const { request } = require('./utils/request');
 App({
   globalData: {
     // 与后端 BASE_URL 同域；小程序合法域名只需配这一个。
-    // baseUrl 留空表示同域相对路径（部署时 nginx 把 /v2/api 挂在同域名下）。
-    baseUrl: '',
+    // 本地联调可临时改为 http://127.0.0.1:8096，并在开发者工具
+    // 「详情-本地设置」勾选"不校验合法域名"。
+    baseUrl: 'https://wx.gxwqb.cn',
     user: null,
   },
 
@@ -44,9 +45,28 @@ App({
   },
 
   // 登录态失效时由 request 调用：清 token 重新静默登录。
+  // 单飞：并发 401 只触发一次重登，其余请求共用同一个 promise。
   relogin() {
+    if (this._reloginPromise) return this._reloginPromise;
     wx.removeStorageSync('token');
     this._loginPromise = null;
-    return this.ensureLogin();
+    this._reloginPromise = this.ensureLogin().finally(() => {
+      this._reloginPromise = null;
+    });
+    return this._reloginPromise;
+  },
+
+  // 支付前取新的 login_code：后端用它换取新鲜 session_key 签名
+  // （session_key 会过期，直接用旧值签名会导致拉起支付失败）。
+  getPayCode() {
+    return new Promise((resolve, reject) => {
+      wx.login({
+        success: (res) => {
+          if (res.code) resolve(res.code);
+          else reject(new Error('微信登录失败，请重试'));
+        },
+        fail: () => reject(new Error('微信登录失败，请重试')),
+      });
+    });
   },
 });

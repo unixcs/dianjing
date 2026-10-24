@@ -1,7 +1,7 @@
 <view wx:if="{{o}}" class="page">
   <view class="status-hero {{o.status === 0 ? 'status-warn' : ''}}">
     <view class="status-main">{{o.status_text}}</view>
-    <view class="status-sub" wx:if="{{o.status === 0}}">请在 30 分钟内完成支付</view>
+    <view class="status-sub" wx:if="{{o.status === 0}}">请在 2 小时内完成支付，超时订单将自动关闭</view>
     <view class="status-sub" wx:elif="{{o.status === 1}}">客服将尽快与您联系，请留意站内消息</view>
     <view class="status-sub" wx:elif="{{o.status === 5}}">退款处理中，结果将原路退回</view>
   </view>
@@ -30,6 +30,7 @@
 
   <view class="footer">
     <block wx:if="{{o.can_pay}}">
+      <view class="btn-ghost act" bindtap="onConfirmPay">我已支付</view>
       <view class="btn-ghost act" bindtap="onCancel">取消订单</view>
       <view class="btn-primary act" bindtap="onPay">去支付</view>
     </block>

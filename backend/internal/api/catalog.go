@@ -48,21 +48,31 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	svcs := s.listServices(r, 0, 20, "")
 	okJSON(w, map[string]any{
 		"notice":   notice,
-		"banners":  jsonRaw(bannersJSON),
+		"banners":  s.banners(bannersJSON),
 		"category": cats,
 		"services": svcs,
 	})
 }
 
-func jsonRaw(s string) any {
-	if s == "" {
-		return []any{}
+// banners decodes the admin-editable banner JSON and absolutizes image
+// paths against BaseURL — same treatment as service covers (relative
+// /uploads/... paths render as blank swipers on the device).
+func (s *Server) banners(raw string) []map[string]any {
+	out := []map[string]any{}
+	if raw == "" {
+		return out
 	}
-	var v any
-	if err := jsonUnmarshal(s, &v); err != nil {
-		return []any{}
+	var items []struct {
+		Image string `json:"image"`
+		URL   string `json:"url"`
 	}
-	return v
+	if jsonUnmarshal(raw, &items) != nil {
+		return out
+	}
+	for _, it := range items {
+		out = append(out, map[string]any{"image": s.serviceCoverURL(it.Image), "url": it.URL})
+	}
+	return out
 }
 
 // ---- GET /categories ----

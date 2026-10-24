@@ -43,17 +43,34 @@ Page({
   },
 
   onPay() {
-    request({ url: '/v2/api/orders/' + this.id + '/pay', method: 'POST' })
+    const a = getApp();
+    // 先换新 login_code 保证 session_key 签名有效
+    a.getPayCode()
+      .then((code) => request({
+        url: '/v2/api/orders/' + this.id + '/pay?login_code=' + code, method: 'POST',
+      }))
       .then((params) => new Promise((resolve, reject) => {
         wx.requestVirtualPayment({
           ...params,
           success: resolve,
-          fail: (res) => reject(Object.assign(new Error(res.errMsg || '支付未完成'), { cancelled: true })),
+          fail: (res) => reject(Object.assign(
+            new Error(res.errMsg || '支付未完成'),
+            { cancelled: /cancel/i.test(res.errMsg || '') },
+          )),
         });
       }))
       .then(() => request({ url: '/v2/api/orders/' + this.id + '/confirm-pay', method: 'POST' }))
       .then(() => { wx.showToast({ title: '支付成功', icon: 'success' }); this.fetch(); })
-      .catch((e) => { if (!e.cancelled) toastError(e); this.fetch(); });
+      .catch((e) => {
+        if (!e.cancelled) {
+          wx.showModal({
+            title: '支付状态确认中',
+            content: (e.message || '') + '，可稍后刷新订单查看进度',
+            showCancel: false,
+          });
+        }
+        this.fetch();
+      });
   },
 
   onCancel() {
@@ -95,8 +112,9 @@ Page({
   },
 
   goService() {
-    if (this.data.o) {
-      wx.navigateTo({ url: '/pages/goods-detail/goods-detail?id=' + this.data.o.id });
+    const o = this.data.o;
+    if (o && o.service_id) {
+      wx.navigateTo({ url: '/pages/goods-detail/goods-detail?id=' + o.service_id });
     }
   },
 });

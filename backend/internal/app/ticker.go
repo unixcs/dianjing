@@ -24,6 +24,7 @@ type Ticker struct {
 	CloseHours int64 // pending-pay auto-cancel age, default 2h
 	Sandbox    bool
 	stop       chan struct{}
+	ticks      int
 }
 
 func (t *Ticker) Start() {
@@ -63,6 +64,10 @@ func (t *Ticker) runOnce() {
 	t.syncRefundingOrders()
 	t.submitApprovedRefunds()
 	t.dispatchProvideGoods()
+	t.ticks++
+	if t.ticks%60 == 0 { // hourly housekeeping
+		t.App.St.DB.Exec(`DELETE FROM events WHERE created_at < ?`, store.Now()-30*86400)
+	}
 }
 
 // 1. auto-cancel 待支付 orders older than CloseHours (ported closeEvent).
@@ -81,17 +86,20 @@ func (t *Ticker) closeStalePendingOrders() {
 	}
 }
 
-//  2. query_order reconciliation for orders in 退款中 or stuck pending-pay
-//     (ported syncVirtualTradeStates + syncVirtualRefund).
+//  2. query_order reconciliation for orders in 退款中, stuck pending-pay,
+//     or recently cancelled (pay-after-cancel: the user completed payment
+//     on a cashier we already closed — MarkPaid revives the order, since
+//     money received must be delivered).
 func (t *Ticker) syncRefundingOrders() {
 	rows, err := t.App.St.DB.Query(`SELECT `+OrderCols+` FROM orders
-		WHERE status IN (?,?) ORDER BY id LIMIT 20`, OrderRefunding, OrderPendingPay)
+		WHERE status IN (?,?,?) AND (status<>? OR created_at>?) ORDER BY id LIMIT 20`,
+		OrderRefunding, OrderPendingPay, OrderCancelled, OrderCancelled, store.Now()-24*3600)
 	if err != nil {
 		return
 	}
 	orders := collectOrders(rows)
 	for _, o := range orders {
-		// Cancelled locally? nothing to reconcile.
+		// Cancelled long ago: nothing to reconcile.
 		if o.Status == OrderPendingPay && store.Now()-o.CreatedAt < 15*60 {
 			continue // too young; confirm-pay flow handles fresh orders
 		}
@@ -108,7 +116,7 @@ func (t *Ticker) syncRefundingOrders() {
 		st := xpay.QueryOrderStatus(resp)
 		switch st {
 		case xpay.VOrderPaid, xpay.VOrderPaidPending:
-			if o.Status == OrderPendingPay {
+			if o.Status == OrderPendingPay || o.Status == OrderCancelled {
 				t.App.MarkPaid(o.ID, xpay.Str(resp, "wxpay_order_id"), "")
 			}
 		case xpay.VOrderRefunded, xpay.VOrderUserRefunded:
@@ -126,9 +134,13 @@ func (t *Ticker) syncRefundingOrders() {
 }
 
 // 3. approved refunds not yet sent to xpay (single-writer submit).
+// failed submissions retry with a 5-minute backoff — the same refund_no
+// is reused, which is WeChat's idempotency key for refund requests.
 func (t *Ticker) submitApprovedRefunds() {
 	rows, err := t.App.St.DB.Query(`SELECT id, order_id FROM refunds
-		WHERE status=? AND xpay_submitted=0 AND ios_waiting=0 ORDER BY id LIMIT 20`, RefundApproved)
+		WHERE xpay_submitted=0 AND ios_waiting=0 AND
+			(status=? OR (status=? AND updated_at<?)) ORDER BY id LIMIT 20`,
+		RefundApproved, RefundFailed, store.Now()-300)
 	if err != nil {
 		return
 	}
@@ -161,17 +173,22 @@ func (t *Ticker) submitApprovedRefunds() {
 //     待联系 → 服务中 transition implies service started; we treat 待联系
 //     orders as delivered (contact info shown to user), dispatch once.
 func (t *Ticker) dispatchProvideGoods() {
+	reclaimBefore := store.Now() - 600 // 'sending' older than 10min = crashed mid-dispatch
 	rows, err := t.App.St.DB.Query(`SELECT `+OrderCols+` FROM orders
-		WHERE status IN (?,?) AND pay_time > 0 AND provide_goods_status = '' ORDER BY id LIMIT 20`,
-		OrderContact, OrderServing)
+		WHERE status IN (?,?) AND pay_time > 0 AND
+			(provide_goods_status='' OR (provide_goods_status='sending' AND updated_at<?))
+		ORDER BY id LIMIT 20`, OrderContact, OrderServing, reclaimBefore)
 	if err != nil {
 		return
 	}
 	orders := collectOrders(rows)
 	for _, o := range orders {
-		// Atomic claim: '' -> 'sending' guards against double dispatch.
+		// Atomic claim: '' -> 'sending' guards against double dispatch;
+		// stale 'sending' rows (process died mid-call) are re-claimed.
 		res, err := t.App.St.DB.Exec(`UPDATE orders SET provide_goods_status='sending', updated_at=?
-			WHERE id=? AND provide_goods_status='' AND risk_status=?`, store.Now(), o.ID, RiskNone)
+			WHERE id=? AND risk_status=? AND
+				(provide_goods_status='' OR (provide_goods_status='sending' AND updated_at<?))`,
+			store.Now(), o.ID, RiskNone, reclaimBefore)
 		if err != nil {
 			continue
 		}

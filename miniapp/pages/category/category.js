@@ -9,9 +9,13 @@ Page({
   },
 
   onLoad() {
+    // 首次进入 + 每次返回本页都由 onShow 统一刷新
+  },
+
+  onShow() {
     request({ url: '/v2/api/categories', noAuth: true })
       .then((d) => this.setData({ categories: d.categories || [] }))
-      .catch(toastError);
+      .catch(() => {});
     this.fetch();
   },
 

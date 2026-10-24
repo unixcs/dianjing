@@ -15,7 +15,7 @@
     </view>
     <view class="field">
       <text class="field-label">联系方式</text>
-      <input value="{{contact}}" bindinput="onContact" placeholder="游戏账号/QQ/微信，便于客服联系" class="field-input" />
+      <input value="{{contact}}" bindinput="onContact" maxlength="100" placeholder="游戏账号/QQ/微信，便于客服联系" class="field-input" />
     </view>
   </view>
 

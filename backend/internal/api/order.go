@@ -19,6 +19,7 @@ import (
 type orderJSON struct {
 	ID         int64  `json:"id"`
 	OrderNo    string `json:"order_no"`
+	ServiceID  int64  `json:"service_id"`
 	Title      string `json:"title"`
 	Cover      string `json:"cover"`
 	PriceCents int64  `json:"price_cents"`
@@ -59,6 +60,7 @@ func (s *Server) toOrderJSON(o *app.Order) orderJSON {
 	j := orderJSON{
 		ID:         o.ID,
 		OrderNo:    o.OrderNo,
+		ServiceID:  o.ServiceID,
 		Title:      o.TitleSnapshot,
 		Cover:      s.serviceCoverURL(o.CoverSnapshot),
 		PriceCents: o.PriceCents,
@@ -88,7 +90,8 @@ type createOrderReq struct {
 func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	var req createOrderReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ServiceID <= 0 {
+	// Hard cap on request size: this endpoint takes ~5 tiny fields.
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil || req.ServiceID <= 0 {
 		failMsg(w, "参数非法")
 		return
 	}
@@ -137,11 +140,12 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 			s.St.DB.Exec(`UPDATE users SET session_key=? WHERE id=?`, sessionKey, u.ID)
 		}
 	}
-	env := xpay.EnvSandboxInt(sv.XPayEnv == 1)
+	// env comes from the global config (single source of truth): sign,
+	// query, refund and push all use the same XPAY_SANDBOX flag.
 	params, signData, err := xpay.BuildPayParams(s.XPay, xpay.SignData{
 		OfferID:      s.Cfg.OfferID,
 		BuyQuantity:  int(o.Quantity),
-		Env:          env,
+		Env:          xpay.EnvSandboxInt(s.Cfg.XPaySandbox),
 		CurrencyType: "CNY",
 		ProductID:    sv.XPayProduct,
 		GoodsPrice:   o.PriceCents,
@@ -168,7 +172,7 @@ func (s *Server) handleOrderConfirmPay(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "订单不存在")
 		return
 	}
-	if o.Status != app.OrderPendingPay {
+	if o.Status != app.OrderPendingPay && o.Status != app.OrderCancelled {
 		okJSON(w, map[string]any{"order": s.toOrderJSON(o)})
 		return
 	}

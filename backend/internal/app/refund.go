@@ -122,13 +122,23 @@ func (a *App) ApplyRefund(o *Order, reason string) (*RefundsRow, error) {
 		VALUES (?,?,?,?,?,?,?,?)`,
 		o.ID, refundNo, o.TotalCents, TruncateStr(reason, 200), status, mode, now, now)
 	if err != nil {
+		// idx_refunds_active may have rejected a concurrent second
+		// application for this order.
+		if a.HasActiveRefund(o.ID) {
+			return nil, ErrRefundUnavailable
+		}
 		return nil, err
 	}
 	id, _ := res.LastInsertId()
 	a.St.Event("refund.apply", "order", o.ID, fmt.Sprintf(`{"refund_no":%q,"mode":%q,"amount":%d}`, refundNo, mode, o.TotalCents))
 
-	// Order enters 退款中 immediately; it never returns to serving.
-	a.transit(o, OrderRefunding, fmt.Sprintf(`{"refund_no":%q}`, refundNo))
+	// Order enters 退款中 immediately; it never returns to serving. If the
+	// transit loses a race (order just completed / cancelled), roll the
+	// refund row back so no orphan active refund blocks future applies.
+	if err := a.transit(o, OrderRefunding, fmt.Sprintf(`{"refund_no":%q}`, refundNo)); err != nil {
+		a.St.DB.Exec(`DELETE FROM refunds WHERE id=? AND xpay_submitted=0`, id)
+		return nil, err
+	}
 
 	rr, _ := a.RefundByID(id)
 	return rr, nil
@@ -176,13 +186,16 @@ func (a *App) LatestRefundForOrder(orderID int64) (*RefundsRow, error) {
 
 // AuditRefund is the operator's approve/reject decision on an audit-mode
 // refund. Approve marks it approved; the ticker performs the xpay call
-// (single writer, same as the legacy compensation design).
+// (single writer, same as the legacy compensation design). Auto-mode iOS
+// refunds (created by an Apple inquiry on a serving order) are auditable
+// here too — that is the only manual lever for that orphan case.
 func (a *App) AuditRefund(refundID int64, approve bool, note string) error {
 	rr, err := a.RefundByID(refundID)
 	if err != nil {
 		return err
 	}
-	if rr.Status != RefundApplying || rr.Mode != RefundModeAudit {
+	auditable := rr.Mode == RefundModeAudit || (rr.Mode == RefundModeAuto && rr.IOSWaiting)
+	if rr.Status != RefundApplying || !auditable {
 		return ErrConflict
 	}
 	target := RefundRejected
@@ -190,9 +203,21 @@ func (a *App) AuditRefund(refundID int64, approve bool, note string) error {
 		target = RefundApproved
 	}
 	now := store.Now()
-	if _, err := a.St.DB.Exec(`UPDATE refunds SET status=?, audit_note=?, updated_at=? WHERE id=?`,
-		target, TruncateStr(note, 200), now, refundID); err != nil {
+	res, err := a.St.DB.Exec(`UPDATE refunds SET status=?, audit_note=?, updated_at=? WHERE id=? AND status=?`,
+		target, TruncateStr(note, 200), now, refundID, RefundApplying)
+	if err != nil {
 		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConflict // raced with another audit/ticker write
+	}
+	if !approve {
+		// Re-open the order (only audit-mode refunds came from 服务中;
+		// iOS auto refunds stay 退款中 pending the App Store outcome).
+		if rr.Mode == RefundModeAudit {
+			a.St.DB.Exec(`UPDATE orders SET status=?, updated_at=? WHERE id=? AND status=?`,
+				OrderServing, now, rr.OrderID, OrderRefunding)
+		}
 	}
 	a.St.Event("refund.audit", "refund", refundID,
 		fmt.Sprintf(`{"approve":%v,"note":%q,"order_id":%d}`, approve, note, rr.OrderID))
@@ -255,9 +280,12 @@ func (a *App) HandleIOSInquiry(payOrderID string, payload map[string]any) (resul
 		RiskLocked, "apple_inquiry", now, o.ID, RiskNone)
 	o, _ = a.OrderByID(o.ID)
 
-	// No refund record yet? Create the tracking one (auto-approved when
-	// service not started, otherwise pending merchant audit).
-	if auditStatus == "" {
+	// Track the Apple inquiry with a refund record. A rejected/failed
+	// history must not block a fresh Apple-side request — without this,
+	// an inquiry on a previously-rejected order creates no tracking row
+	// and the App Store outcome can never converge.
+	needTrack := auditStatus == "" || auditStatus == RefundRejected || auditStatus == RefundFailed
+	if needTrack {
 		initStatus := RefundApplying
 		if stage == StageNotStarted {
 			initStatus = RefundApproved
@@ -266,7 +294,7 @@ func (a *App) HandleIOSInquiry(payOrderID string, payload map[string]any) (resul
 			VALUES (?,?,?,?,?,?,?,?,?)`,
 			o.ID, genRefundNo(), o.TotalCents, FirstNonEmpty(reason, "App Store退款申请"),
 			initStatus, "auto", 1, now, now)
-	} else {
+	} else if auditStatus == RefundApplying || auditStatus == RefundApproved {
 		a.St.DB.Exec(`UPDATE refunds SET ios_waiting=1, updated_at=? WHERE order_id=? AND status IN ('applying','approved')`,
 			now, o.ID)
 	}
@@ -367,17 +395,22 @@ func (a *App) SubmitRefundToXPay(o *Order, rr *RefundsRow) error {
 	return nil
 }
 
-// finalizeRefund converges a refund to completed: refund → 6已退款 and
-// order → 6已退款. Idempotent (ported from Refund::finalizeVirtualRefund).
+// finalizeRefund converges a refund to completed: refund → refunded and
+// order → 6已退款. Both updates are idempotent and independently guarded,
+// so an interrupted run (crash between them) always converges on retry —
+// the old early-return-on-refunded left the order stuck at 退款中 forever.
 func (a *App) finalizeRefund(o *Order, rr *RefundsRow, via string) error {
-	if rr.Status == RefundRefunded {
-		return nil
-	}
 	now := store.Now()
 	a.St.DB.Exec(`UPDATE refunds SET status=?, updated_at=? WHERE id=? AND status IN ('applying','approved','failed')`,
 		RefundRefunded, now, rr.ID)
-	if o.Status != OrderRefunded {
-		a.St.DB.Exec(`UPDATE orders SET status=?, updated_at=? WHERE id=?`, OrderRefunded, now, o.ID)
+	// Money is back with the user: any paid/live order state collapses to
+	// 已退款 (never from 待支付/已取消, which cannot carry a real refund).
+	res, err := a.St.DB.Exec(`UPDATE orders SET status=?, updated_at=? WHERE id=? AND status IN (?,?,?,?,?)`,
+		OrderRefunded, now, o.ID, OrderContact, OrderServing, OrderDone, OrderRefunding, OrderRefunded)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
 		a.St.Event("order.refunded", "order", o.ID, fmt.Sprintf(`{"via":%q,"refund_no":%q}`, via, rr.RefundNo))
 	}
 	return nil
@@ -390,7 +423,8 @@ func (a *App) RejectRefundByMerchant(rr *RefundsRow) {
 		return
 	}
 	if o, err := a.OrderByID(rr.OrderID); err == nil && o.Status == OrderRefunding {
-		a.St.DB.Exec(`UPDATE orders SET status=?, updated_at=? WHERE id=?`, OrderServing, store.Now(), o.ID)
+		a.St.DB.Exec(`UPDATE orders SET status=?, updated_at=? WHERE id=? AND status=?`,
+			OrderServing, store.Now(), o.ID, OrderRefunding)
 		a.St.Event("order.refund_rejected", "order", o.ID, fmt.Sprintf(`{"refund_no":%q}`, rr.RefundNo))
 	}
 }
@@ -421,5 +455,6 @@ func (a *App) MarkRefundedFromPush(orderNo string) bool {
 }
 
 func genRefundNo() string {
-	return "vrf" + fmt.Sprintf("%d%04d", store.Now(), store.Now()%10000)
+	// Random suffix avoids same-second collisions on the UNIQUE refund_no.
+	return "vrf" + fmt.Sprintf("%d%04d", store.Now(), randIntn(10000))
 }

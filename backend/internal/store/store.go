@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -45,7 +46,17 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("migrate: %w\nstmt: %s", err, stmt)
 		}
 	}
+	// Column additions for databases created before the column existed
+	// (CREATE TABLE IF NOT EXISTS never touches existing tables).
+	s.addColumn("orders", "contact", "TEXT NOT NULL DEFAULT ''")
 	return nil
+}
+
+func (s *Store) addColumn(table, col, def string) {
+	q := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, col, def)
+	if _, err := s.DB.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		fmt.Printf("store: addColumn %s.%s: %v\n", table, col, err)
+	}
 }
 
 var schema = []string{
@@ -101,6 +112,7 @@ var schema = []string{
 		risk_status INTEGER NOT NULL DEFAULT 0,        -- 0无 1命中锁定 2已放行
 		risk_source TEXT NOT NULL DEFAULT '',
 		cancel_reason TEXT NOT NULL DEFAULT '',
+		contact TEXT NOT NULL DEFAULT '', -- 用户下单联系方式（微信/手机号）
 		pay_time INTEGER NOT NULL DEFAULT 0,
 		complete_time INTEGER NOT NULL DEFAULT 0,
 		created_at INTEGER NOT NULL,
@@ -108,6 +120,7 @@ var schema = []string{
 	)`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_client_token ON orders(client_token)`,
 	`CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, status, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, id)`,
 	`CREATE TABLE IF NOT EXISTS refunds (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		order_id INTEGER NOT NULL,
@@ -123,6 +136,9 @@ var schema = []string{
 		updated_at INTEGER NOT NULL
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_refunds_order ON refunds(order_id)`,
+	// One active (applying/approved) refund per order — DB-level backstop
+	// against double-refund races in ApplyRefund.
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_refunds_active ON refunds(order_id) WHERE status IN ('applying','approved')`,
 	`CREATE TABLE IF NOT EXISTS refund_inquiries (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		order_id INTEGER NOT NULL DEFAULT 0,

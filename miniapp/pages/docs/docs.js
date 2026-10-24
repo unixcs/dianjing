@@ -8,8 +8,9 @@ Page({
   },
 
   onLoad(options) {
+    // key 白名单：标题不再信任页面参数，避免任意导航栏标题注入
     const key = options.key === 'privacy' ? 'privacy' : 'service-policy';
-    const title = options.title || (key === 'privacy' ? '隐私政策' : '服务政策');
+    const title = key === 'privacy' ? '隐私政策' : '服务政策';
     this.setData({ title });
     wx.setNavigationBarTitle({ title });
     request({ url: '/v2/api/docs/' + key, noAuth: true })

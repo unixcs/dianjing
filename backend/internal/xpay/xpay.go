@@ -181,19 +181,28 @@ func (e *APIError) Error() string {
 }
 
 func (c *Client) signedPost(uri string, payload any, out any) error {
-	tok, err := c.AccessToken()
-	if err != nil {
-		return err
-	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	if err := c.postOnce(uri, tok, body, out); err != nil {
+	err = c.postWithToken(uri, body, out)
+	// Retry once on invalid/expired access_token (40001/42001) like the
+	// PHP port: drop the cached token and re-fetch before the second try.
+	if ae, ok := err.(*APIError); ok && (ae.ErrCode == 40001 || ae.ErrCode == 42001) {
+		c.mu.Lock()
+		c.accessToken, c.tokenExpAt = "", 0
+		c.mu.Unlock()
+		err = c.postWithToken(uri, body, out)
+	}
+	return err
+}
+
+func (c *Client) postWithToken(uri string, body []byte, out any) error {
+	tok, err := c.AccessToken()
+	if err != nil {
 		return err
 	}
-	// retry once on invalid access_token (40001) like the PHP port
-	return nil
+	return c.postOnce(uri, tok, body, out)
 }
 
 func (c *Client) postOnce(uri, token string, body []byte, out any) error {
@@ -294,17 +303,29 @@ func (c *Client) RefundOrder(openid, outTradeNo, refundOrderID string, leftFee, 
 
 // NotifyProvideGoods calls /xpay/notify_provide_goods — the exception
 // that carries access_token only, no pay_sig (ported behaviour).
-// Legacy payload: {order_id: out_trade_no, env}.
+// Legacy payload: {order_id: out_trade_no, env}. Retries once on an
+// invalid/expired access_token.
 func (c *Client) NotifyProvideGoods(env int, outTradeNo string) (map[string]any, error) {
-	tok, err := c.AccessToken()
-	if err != nil {
-		return nil, err
-	}
 	payload := map[string]any{
 		"order_id": outTradeNo,
 		"env":      env,
 	}
 	body, _ := json.Marshal(payload)
+	out, err := c.notifyOnce(body)
+	if ae, ok := err.(*APIError); ok && (ae.ErrCode == 40001 || ae.ErrCode == 42001) {
+		c.mu.Lock()
+		c.accessToken, c.tokenExpAt = "", 0
+		c.mu.Unlock()
+		out, err = c.notifyOnce(body)
+	}
+	return out, err
+}
+
+func (c *Client) notifyOnce(body []byte) (map[string]any, error) {
+	tok, err := c.AccessToken()
+	if err != nil {
+		return nil, err
+	}
 	url := fmt.Sprintf("https://api.weixin.qq.com%s?access_token=%s", uriNotifyProvideGood, tok)
 	resp, err := c.hc.Post(url, "application/json", strings.NewReader(string(body)))
 	if err != nil {
