@@ -1,0 +1,48 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/category/category",
+    "pages/goods-detail/goods-detail",
+    "pages/checkout/checkout",
+    "pages/order/order",
+    "pages/order-detail/order-detail",
+    "pages/refund/refund",
+    "pages/feedback/feedback",
+    "pages/docs/docs",
+    "pages/user/user"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#5b6cff",
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "观星电竞",
+    "backgroundColor": "#f5f6fa"
+  },
+  "tabBar": {
+    "color": "#999999",
+    "selectedColor": "#5b6cff",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "首页",
+        "iconPath": "assets/tab-home.png",
+        "selectedIconPath": "assets/tab-home-active.png"
+      },
+      {
+        "pagePath": "pages/order/order",
+        "text": "订单",
+        "iconPath": "assets/tab-order.png",
+        "selectedIconPath": "assets/tab-order-active.png"
+      },
+      {
+        "pagePath": "pages/user/user",
+        "text": "我的",
+        "iconPath": "assets/tab-user.png",
+        "selectedIconPath": "assets/tab-user-active.png"
+      }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

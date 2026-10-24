@@ -395,10 +395,11 @@ func stripHTML(s string) string {
 	if s == "" {
 		return ""
 	}
-	// decode the handful of entities YoShop escapes, then drop tags.
-	r := strings.NewReplacer("&lt;p&gt;", "\n", "&lt;/p&gt;", "", "&lt;br&gt;", "\n",
-		"&lt;br/&gt;", "\n", "&lt;span&gt;", "", "&lt;/span&gt;", "", "&amp;nbsp;", " ",
-		"&lt;img", "\n[图片]", "&quot;", `"`, "&amp;amp;", "&")
+	// YoShop stores HTML entity-escaped (so tags arrive as &lt;p&gt;).
+	// Decode the common entities first; the generic tag-stripper below
+	// then removes whatever remains (&lt;span style=...&gt; etc.).
+	r := strings.NewReplacer("&lt;", "<", "&gt;", ">", "&quot;", `"`,
+		"&amp;nbsp;", " ", "&nbsp;", " ", "&amp;amp;", "&")
 	s = r.Replace(s)
 	var b strings.Builder
 	depth := 0

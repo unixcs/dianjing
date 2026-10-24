@@ -1,0 +1,18 @@
+<view wx:if="{{svc}}" class="page">
+  <image wx:if="{{svc.cover}}" src="{{svc.cover}}" mode="aspectFill" class="hero" />
+  <view class="card">
+    <view class="title">{{svc.title}}</view>
+    <view class="row">
+      <text class="price big">{{svc.priceText}}</text>
+      <text class="sales">已售 {{svc.sales}}</text>
+    </view>
+  </view>
+  <view class="card">
+    <view class="section-label">服务说明</view>
+    <text class="content" user-select>{{svc.content || '暂无介绍'}}</text>
+  </view>
+  <view class="footer">
+    <view class="btn-primary buy-btn" bindtap="buy">立即购买</view>
+  </view>
+</view>
+<view wx:else class="empty">{{loading ? '加载中...' : '服务不存在或已下架'}}</view>

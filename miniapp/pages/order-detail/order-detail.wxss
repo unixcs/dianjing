@@ -1,0 +1,41 @@
+.status-hero {
+  background: linear-gradient(135deg, #5b6cff, #4a55e8);
+  color: #fff;
+  padding: 48rpx 40rpx;
+}
+.status-warn { background: linear-gradient(135deg, #ff9a3a, #ff6a3a); }
+.status-main { font-size: 40rpx; font-weight: 600; }
+.status-sub { font-size: 26rpx; opacity: 0.9; margin-top: 10rpx; }
+
+.row-service { display: flex; }
+.cover { width: 120rpx; height: 120rpx; border-radius: 12rpx; flex-shrink: 0; }
+.cover-empty {
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #6c7bff, #4a55e8);
+  color: #fff; font-size: 24rpx;
+}
+.info { flex: 1; margin-left: 20rpx; }
+.title { font-size: 30rpx; }
+.qty { color: #999; font-size: 24rpx; margin: 6rpx 0; }
+.total-line {
+  display: flex;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 16rpx;
+  margin-top: 20rpx;
+  padding-top: 20rpx;
+  border-top: 2rpx solid #f2f3f7;
+}
+.big { font-size: 36rpx; }
+
+.kv-row { display: flex; padding: 10rpx 0; font-size: 26rpx; }
+.k { color: #999; width: 160rpx; flex-shrink: 0; }
+.v { flex: 1; word-break: break-all; }
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 20rpx;
+  padding: 24rpx 40rpx calc(24rpx + env(safe-area-inset-bottom));
+}
+.act { min-width: 200rpx; text-align: center; }

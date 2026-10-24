@@ -1,0 +1,31 @@
+<view class="page">
+  <swiper wx:if="{{banners.length}}" class="banner" indicator-dots autoplay circular interval="4000">
+    <swiper-item wx:for="{{banners}}" wx:key="image" bindtap="onBannerTap" data-url="{{item.url}}">
+      <image src="{{item.image}}" mode="aspectFill" class="banner-img" />
+    </swiper-item>
+  </swiper>
+
+  <view wx:if="{{notice}}" class="notice">
+    <text class="notice-label">公告</text>
+    <text class="notice-text">{{notice}}</text>
+  </view>
+
+  <view class="cats card">
+    <view wx:for="{{categories}}" wx:key="id" class="cat-chip" bindtap="goCategory">{{item.name}}</view>
+  </view>
+
+  <view class="section-title">热门服务</view>
+  <view class="grid">
+    <view wx:for="{{services}}" wx:key="id" class="svc card" bindtap="goDetail" data-id="{{item.id}}">
+      <image wx:if="{{item.cover}}" src="{{item.cover}}" mode="aspectFill" class="svc-cover" />
+      <view wx:else class="svc-cover svc-cover-empty">观星</view>
+      <view class="svc-title">{{item.title}}</view>
+      <view class="svc-bottom">
+        <text class="price svc-price">{{item.priceText}}</text>
+        <text class="svc-sales">已售 {{item.sales}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="empty" wx:if="{{!loading && !services.length}}">暂无服务</view>
+</view>

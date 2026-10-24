@@ -1,0 +1,57 @@
+// 全局样式：通用工具类 + 页面公共色板
+page {
+  background: #f5f6fa;
+  font-size: 28rpx;
+  color: #222;
+}
+
+.card {
+  background: #fff;
+  border-radius: 16rpx;
+  margin: 20rpx;
+  padding: 24rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+}
+
+.btn-primary {
+  background: #5b6cff;
+  color: #fff;
+  border-radius: 40rpx;
+  font-size: 30rpx;
+  line-height: 88rpx;
+  text-align: center;
+}
+.btn-primary[disabled] {
+  background: #b9c0ff;
+  color: #f0f0f0;
+}
+
+.btn-ghost {
+  border: 2rpx solid #5b6cff;
+  color: #5b6cff;
+  border-radius: 40rpx;
+  font-size: 28rpx;
+  line-height: 64rpx;
+  padding: 0 28rpx;
+  display: inline-block;
+}
+
+.price {
+  color: #ff5b3a;
+  font-weight: 600;
+}
+
+.empty {
+  text-align: center;
+  color: #999;
+  padding: 120rpx 0;
+  font-size: 26rpx;
+}
+
+.tag {
+  display: inline-block;
+  font-size: 22rpx;
+  padding: 2rpx 14rpx;
+  border-radius: 8rpx;
+  border: 2rpx solid currentColor;
+}

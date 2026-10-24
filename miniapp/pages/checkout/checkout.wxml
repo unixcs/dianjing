@@ -1,0 +1,34 @@
+<view wx:if="{{svc}}" class="page">
+  <view class="card order-card">
+    <image wx:if="{{svc.cover}}" src="{{svc.cover}}" mode="aspectFill" class="cover" />
+    <view wx:else class="cover cover-empty">观星</view>
+    <view class="info">
+      <view class="title">{{svc.title}}</view>
+      <text class="price">{{svc.priceText}}</text>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="field">
+      <text class="field-label">数量</text>
+      <input type="number" value="{{quantity}}" bindblur="onQuantity" class="field-input quantity" />
+    </view>
+    <view class="field">
+      <text class="field-label">联系方式</text>
+      <input value="{{contact}}" bindinput="onContact" placeholder="游戏账号/QQ/微信，便于客服联系" class="field-input" />
+    </view>
+  </view>
+
+  <view class="card total-row">
+    <text>合计</text>
+    <text class="price big">{{svc.totalText}}</text>
+  </view>
+
+  <view class="footer">
+    <button class="btn-primary buy-btn" disabled="{{submitting || payStatus}}" bindtap="submit">
+      {{submitting ? '创建订单中...' : payStatus === 'paying' ? '支付中...' : payStatus === 'verifying' ? '确认支付结果...' : '微信虚拟支付'}}
+    </button>
+    <view class="tip">点击即同意 <text class="link" bindtap="goPolicy">《服务政策》</text>；服务类商品支付后按平台规则退款</view>
+  </view>
+</view>
+<view wx:else class="empty">加载中...</view>

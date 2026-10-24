@@ -1,0 +1,13 @@
+<view wx:for="{{list}}" wx:key="id" class="card" bindtap="goOrder" data-order="{{item.order_id}}">
+  <view class="head">
+    <text class="no">退款单号 {{item.refund_no}}</text>
+    <text class="status {{item.status === 'refunded' ? 'status-ok' : ''}}">{{item.statusText}}{{item.iosText}}</text>
+  </view>
+  <view class="title">{{item.title}}</view>
+  <view class="bottom">
+    <text class="time">{{item.timeText}}</text>
+    <text class="price">{{item.amountText}}</text>
+  </view>
+  <view class="reason" wx:if="{{item.reason}}">原因：{{item.reason}}</view>
+</view>
+<view class="empty" wx:if="{{!loading && !list.length}}">暂无退款记录</view>

@@ -1,0 +1,39 @@
+<view wx:if="{{o}}" class="page">
+  <view class="status-hero {{o.status === 0 ? 'status-warn' : ''}}">
+    <view class="status-main">{{o.status_text}}</view>
+    <view class="status-sub" wx:if="{{o.status === 0}}">请在 30 分钟内完成支付</view>
+    <view class="status-sub" wx:elif="{{o.status === 1}}">客服将尽快与您联系，请留意站内消息</view>
+    <view class="status-sub" wx:elif="{{o.status === 5}}">退款处理中，结果将原路退回</view>
+  </view>
+
+  <view class="card">
+    <view class="row-service" bindtap="goService">
+      <image wx:if="{{o.cover}}" src="{{o.cover}}" mode="aspectFill" class="cover" />
+      <view wx:else class="cover cover-empty">观星</view>
+      <view class="info">
+        <view class="title">{{o.title}}</view>
+        <view class="qty">x{{o.quantity}}</view>
+        <text class="price">{{o.priceText}}</text>
+      </view>
+    </view>
+    <view class="total-line">
+      <text>实付款</text>
+      <text class="price big">{{o.totalText}}</text>
+    </view>
+  </view>
+
+  <view class="card kv">
+    <view class="kv-row"><text class="k">订单编号</text><text class="v" user-select>{{o.order_no}}</text></view>
+    <view class="kv-row"><text class="k">创建时间</text><text class="v">{{o.timeText}}</text></view>
+    <view class="kv-row" wx:if="{{o.pay_time}}"><text class="k">支付时间</text><text class="v">{{o.payTimeText}}</text></view>
+  </view>
+
+  <view class="footer">
+    <block wx:if="{{o.can_pay}}">
+      <view class="btn-ghost act" bindtap="onCancel">取消订单</view>
+      <view class="btn-primary act" bindtap="onPay">去支付</view>
+    </block>
+    <view wx:elif="{{o.can_refund}}" class="btn-ghost act confirm-btn" bindtap="onRefund">申请退款</view>
+  </view>
+</view>
+<view wx:else class="empty">{{loading ? '加载中...' : '订单不存在'}}</view>

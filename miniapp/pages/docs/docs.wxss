@@ -1,0 +1,8 @@
+.doc {
+  font-size: 28rpx;
+  line-height: 1.8;
+  color: #333;
+  white-space: pre-wrap;
+  margin: 20rpx;
+  padding: 32rpx;
+}

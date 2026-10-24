@@ -27,6 +27,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /v2/api/orders", s.userAuth(s.handleOrders))
 	mux.HandleFunc("GET /v2/api/orders/{id}", s.userAuth(s.handleOrderDetail))
 
+	// my refunds + feedback (token required)
+	mux.HandleFunc("GET /v2/api/refunds", s.userAuth(s.handleMyRefunds))
+	mux.HandleFunc("GET /v2/api/feedbacks", s.userAuth(s.handleMyFeedbacks))
+	mux.HandleFunc("POST /v2/api/feedbacks", s.userAuth(s.handleMyFeedbacks))
+
 	// WeChat message push (xpay events); token-signed, no user auth.
 	mux.HandleFunc("GET /wx/msg", s.handleWxMsg)
 	mux.HandleFunc("POST /wx/msg", s.handleWxMsg)

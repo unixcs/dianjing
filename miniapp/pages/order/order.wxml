@@ -1,0 +1,31 @@
+<view class="tabs">
+  <view
+    wx:for="{{tabs}}"
+    wx:key="key"
+    class="tab {{active === item.key ? 'tab-active' : ''}}"
+    bindtap="onTab"
+    data-key="{{item.key}}"
+  >{{item.label}}</view>
+</view>
+
+<view wx:for="{{orders}}" wx:key="id" class="card order" bindtap="goDetail" data-id="{{item.id}}">
+  <view class="head">
+    <text class="time">{{item.timeText}}</text>
+    <text class="status">{{item.status_text}}</text>
+  </view>
+  <view class="body">
+    <image wx:if="{{item.cover}}" src="{{item.cover}}" mode="aspectFill" class="cover" />
+    <view wx:else class="cover cover-empty">观星</view>
+    <view class="info">
+      <view class="title">{{item.title}}</view>
+      <view class="qty">x{{item.quantity}}</view>
+      <text class="price total">{{item.totalText}}</text>
+    </view>
+  </view>
+  <view class="actions" wx:if="{{item.can_pay || item.can_cancel}}">
+    <view class="btn-ghost act" wx:if="{{item.can_cancel}}" catchtap="onCancel" data-id="{{item.id}}">取消订单</view>
+    <view class="btn-primary act act-pay" wx:if="{{item.can_pay}}" catchtap="onPay" data-id="{{item.id}}">去支付</view>
+  </view>
+</view>
+
+<view class="empty" wx:if="{{!loading && !orders.length}}">暂无订单</view>

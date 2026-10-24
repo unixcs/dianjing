@@ -1,0 +1,31 @@
+<view class="wrap">
+  <scroll-view scroll-y class="side">
+    <view class="side-item {{activeCat === 0 ? 'side-item-active' : ''}}" bindtap="onPick" data-id="0">全部</view>
+    <view
+      wx:for="{{categories}}"
+      wx:key="id"
+      class="side-item {{activeCat === item.id ? 'side-item-active' : ''}}"
+      bindtap="onPick"
+      data-id="{{item.id}}"
+    >{{item.name}}</view>
+  </scroll-view>
+
+  <scroll-view scroll-y class="main">
+    <view
+      wx:for="{{services}}"
+      wx:key="id"
+      class="svc card"
+      bindtap="goDetail"
+      data-id="{{item.id}}"
+    >
+      <image wx:if="{{item.cover}}" src="{{item.cover}}" mode="aspectFill" class="svc-cover" />
+      <view wx:else class="svc-cover svc-cover-empty">观星</view>
+      <view class="svc-info">
+        <view class="svc-title">{{item.title}}</view>
+        <view class="svc-meta">已售 {{item.sales}}</view>
+        <text class="price svc-price">{{item.priceText}}</text>
+      </view>
+    </view>
+    <view class="empty" wx:if="{{!loading && !services.length}}">该分类暂无服务</view>
+  </scroll-view>
+</view>
