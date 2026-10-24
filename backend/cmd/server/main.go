@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"dianjing/backend/internal/api"
 	"dianjing/backend/internal/app"
@@ -40,5 +41,11 @@ func main() {
 	defer tk.Stop()
 	addr := cfg.ListenAddr
 	fmt.Printf("dianjing backend listening on %s (data: %s)\n", addr, cfg.DataDir)
-	log.Fatal(http.ListenAndServe(addr, srv.Routes()))
+	// /uploads/ serves DataDir/uploads directly; nginx may take over this
+	// prefix in production — the Go handler is the no-nginx fallback.
+	mux := http.NewServeMux()
+	mux.Handle("/uploads/", http.StripPrefix("/uploads/",
+		http.FileServer(http.Dir(filepath.Join(cfg.DataDir, "uploads")))))
+	mux.Handle("/", srv.Routes())
+	log.Fatal(http.ListenAndServe(addr, mux))
 }
