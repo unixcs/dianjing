@@ -90,11 +90,14 @@ func validateConfig(cfg *config.Config) error {
 	return nil
 }
 
-// noDirListing serves files but refuses directory indexes.
+// noDirListing serves files but refuses directory indexes. StripPrefix
+// removes the whole "/uploads/" prefix, so a request for the directory
+// root arrives with an EMPTY path — that case must be rejected too or
+// the FileServer happily lists the directory (caught by local E2E).
 func noDirListing(root http.FileSystem) http.Handler {
 	fs := http.FileServer(root)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/") {
+		if p := r.URL.Path; p == "" || strings.HasSuffix(p, "/") || strings.HasSuffix(p, "/.") {
 			http.NotFound(w, r)
 			return
 		}

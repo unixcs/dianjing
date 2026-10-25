@@ -1,4 +1,4 @@
-// 全局样式：通用工具类 + 页面公共色板
+/* 全局样式：通用工具类 + 页面公共色板 */
 page {
   background: #f5f6fa;
   font-size: 28rpx;

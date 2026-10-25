@@ -6,9 +6,11 @@ const { request } = require('./utils/request');
 App({
   globalData: {
     // 与后端 BASE_URL 同域；小程序合法域名只需配这一个。
-    // 本地联调可临时改为 http://127.0.0.1:8096，并在开发者工具
-    // 「详情-本地设置」勾选"不校验合法域名"。
-    baseUrl: 'https://wx.gxwqb.cn',
+    // 开发者工具/体验版（develop/trial）自动切本地后端，正式版仍走线上域名；
+    // 工具联调需在「详情-本地设置」勾选"不校验合法域名"（urlCheck:false）。
+    baseUrl: ['develop', 'trial'].includes(
+      (wx.getAccountInfoSync().miniProgram || {}).envVersion
+    ) ? 'http://127.0.0.1:8096' : 'https://wx.gxwqb.cn',
     user: null,
   },
 

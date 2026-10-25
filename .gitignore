@@ -14,3 +14,12 @@ backend/server
 # os/editor
 .DS_Store
 *.swp
+
+# node
+node_modules/
+tools/artifacts/
+
+# local binaries
+*.exe
+# local logs
+*.log

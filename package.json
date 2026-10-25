@@ -1,0 +1,20 @@
+{
+  "name": "dianjing",
+  "version": "1.0.0",
+  "description": "观星电竞小程序重构版：Go + SQLite 后端 + 微信原生小程序前端。设计文档见 [PLAN.md](PLAN.md)，部署步骤见 [DEPLOY.md](DEPLOY.md)。",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "tx:/mnt/vps/projects/dianjing"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "miniprogram-automator": "^0.13.0"
+  }
+}
